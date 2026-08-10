@@ -19,7 +19,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
-          make release-artifacts CONFIGURATION=release VERSION="$VERSION"
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" CREATE_DMG_FINALIZE_FLAGS=''
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

@@ -10,6 +10,7 @@ RELEASE_DIR := release
 DMG := $(RELEASE_DIR)/WallpaperSelector-$(VERSION).dmg
 STAGING_DIR := $(RELEASE_DIR)/staging
 CREATE_DMG ?= create-dmg
+CREATE_DMG_FINALIZE_FLAGS ?= --skip-finalize
 DMG_BACKGROUND := Support/Installer/dmg-background.png
 DMG_ICON := SwiftWallpaperSelector/Sources/WallpaperSelector/Resources/AppIcon.icns
 
@@ -53,9 +54,8 @@ dmg: bundle
 	rm -rf "$(RELEASE_DIR)"
 	mkdir -p "$(STAGING_DIR)"
 	cp -R "$(APP_BUNDLE)" "$(STAGING_DIR)/$(APP_NAME).app"
-	$(CREATE_DMG) --volname "$(APP_NAME)" --volicon "$(DMG_ICON)" --background "$(DMG_BACKGROUND)" --window-size 660 440 --icon-size 110 --text-size 12 --icon "$(APP_NAME).app" 170 250 --app-drop-link 490 250 --hide-extension "$(APP_NAME).app" --no-internet-enable --skip-finalize "$(DMG)" "$(STAGING_DIR)"
-	hdiutil convert "$(DMG)" -format UDZO -o "$(DMG).final"
-	mv "$(DMG).final.dmg" "$(DMG)"
+	$(CREATE_DMG) --volname "$(APP_NAME)" --volicon "$(DMG_ICON)" --background "$(DMG_BACKGROUND)" --window-size 660 440 --icon-size 110 --text-size 12 --icon "$(APP_NAME).app" 170 250 --app-drop-link 490 250 --hide-extension "$(APP_NAME).app" --no-internet-enable $(CREATE_DMG_FINALIZE_FLAGS) "$(DMG)" "$(STAGING_DIR)"
+	if [ -n "$(CREATE_DMG_FINALIZE_FLAGS)" ]; then hdiutil convert "$(DMG)" -format UDZO -o "$(DMG).final"; mv "$(DMG).final.dmg" "$(DMG)"; fi
 
 release-artifacts: dmg
 	shasum -a 256 "$(DMG)" > "$(DMG).sha256"
