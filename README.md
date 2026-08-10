@@ -63,6 +63,22 @@ brew install --cask wiggly-sheets/tap/wallpaper-selector
 2. Open it and drag **Wallpaper Selector** to Applications.
 3. Launch app. On first run, choose one or more wallpaper folders.
 
+### First open and quarantine
+
+Current releases are ad-hoc signed and not notarized. macOS may show a
+quarantine warning on first open. Only bypass it for a DMG downloaded from the
+[official releases page](https://github.com/wiggly-sheets/wallpaper-selector/releases/latest).
+
+**Finder UI:** Open Applications, Control-click **Wallpaper Selector**, choose
+**Open**, then choose **Open** again in macOS confirmation dialog.
+
+**Terminal:** Remove quarantine from this app only, then launch it:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Wallpaper Selector.app"
+open "/Applications/Wallpaper Selector.app"
+```
+
 ### All Spaces permission
 
 macOS has no public API for its **Show on all Spaces** wallpaper preference.
