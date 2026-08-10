@@ -16,6 +16,8 @@ final class TrayPopoverWindowController: NSWindowController {
     private var statusItem: NSStatusItem?
 
     private var viewModel: TrayPopoverViewModel?
+    private var globalMouseMonitor: Any?
+    private var localMouseMonitor: Any?
 
     // MARK: - Init
 
@@ -67,7 +69,7 @@ final class TrayPopoverWindowController: NSWindowController {
             hostingView.bottomAnchor.constraint(equalTo: materialView.bottomAnchor)
         ])
         viewModel.onShowMainWindow = { [weak self] in
-            self?.close()
+            self?.hide()
             NotificationCenter.default.post(name: .OpenMainWindowRequested, object: nil)
         }
 
@@ -81,6 +83,7 @@ final class TrayPopoverWindowController: NSWindowController {
     }
 
     deinit {
+        removeOutsideClickMonitors()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -109,12 +112,50 @@ final class TrayPopoverWindowController: NSWindowController {
 
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        installOutsideClickMonitors()
     }
 
     // MARK: - Blur handling
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === self.window else { return }
-        close()
+        hide()
+    }
+
+    private func installOutsideClickMonitors() {
+        removeOutsideClickMonitors()
+
+        let events: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) { [weak self] event in
+            DispatchQueue.main.async {
+                self?.hideIfOutside(screenPoint: event.locationInWindow)
+            }
+        }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: events) { [weak self] event in
+            let screenPoint = event.window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            self?.hideIfOutside(screenPoint: screenPoint)
+            return event
+        }
+    }
+
+    private func removeOutsideClickMonitors() {
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+            self.globalMouseMonitor = nil
+        }
+        if let localMouseMonitor {
+            NSEvent.removeMonitor(localMouseMonitor)
+            self.localMouseMonitor = nil
+        }
+    }
+
+    private func hideIfOutside(screenPoint: NSPoint) {
+        guard let window, window.isVisible, !window.frame.contains(screenPoint) else { return }
+        hide()
+    }
+
+    private func hide() {
+        removeOutsideClickMonitors()
+        window?.orderOut(nil)
     }
 }
