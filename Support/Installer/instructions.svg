@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="440" viewBox="0 0 660 440">
+  <g fill="#fff" font-family="Verdana, sans-serif" text-anchor="middle">
+    <text x="330" y="70" font-size="24">Wallpaper Selector</text>
+    <text x="330" y="105" font-size="15">Drag to Applications to install</text>
+  </g>
+  <path d="M270 260 C330 220 380 220 425 250" fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="3"/>
+  <path d="M414 239 L438 251 L415 263 Z" fill="#fff" fill-opacity=".8"/>
+</svg>

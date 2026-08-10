@@ -1,0 +1,11 @@
+cask "wallpaper-selector" do
+  version "VERSION"
+  sha256 "SHA256"
+
+  url "https://github.com/wiggly-sheets/wallpaper-selector/releases/download/v#{version}/WallpaperSelector-#{version}.dmg"
+  name "Wallpaper Selector"
+  desc "Native macOS menu-bar wallpaper picker and rotator"
+  homepage "https://github.com/wiggly-sheets/wallpaper-selector"
+
+  app "Wallpaper Selector.app"
+end
