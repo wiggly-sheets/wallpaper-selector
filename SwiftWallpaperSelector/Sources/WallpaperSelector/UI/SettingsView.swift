@@ -1,8 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// Settings view that mirrors the original ContentView functionality,
-/// now using SettingsViewModel for all state and mutations.
 struct SettingsView: View {
     @EnvironmentObject var viewModel: SettingsViewModel
     @Environment(\.dismiss) private var dismiss
@@ -20,7 +18,6 @@ struct SettingsView: View {
             .frame(minWidth: 190, idealWidth: 210)
         } detail: {
             Form {
-                // MARK: - General
 
                 if selectedCategory == .general {
                 Section("General") {
@@ -59,7 +56,6 @@ struct SettingsView: View {
                 }
                 }
 
-                // MARK: - Appearance
 
                 if selectedCategory == .appearance {
                 Section("Appearance") {
@@ -82,7 +78,6 @@ struct SettingsView: View {
                         .accessibilityLabel("All spaces toggle")
                         .onChange(of: viewModel.allSpaces) { viewModel.setAllSpaces($0) }
 
-                    // Appearance-specific theme overrides
                     if !viewModel.themes.isEmpty {
                         Picker("Light Theme", selection: $viewModel.appearanceLightThemeID) {
                             Text("None").tag(Optional<String>.none as String?)
@@ -103,7 +98,6 @@ struct SettingsView: View {
                         .onChange(of: viewModel.appearanceDarkThemeID) { _ in viewModel.persistAppearanceOverrides() }
                     }
 
-                    // Appearance-specific wallpaper overrides (for "All Folders")
                     Section("Appearance Overrides (All Folders)") {
                         Picker("Light Wallpaper", selection: $viewModel.allFoldersLightWallpaper) {
                             Text("None").tag(Optional<String>.none as String?)
@@ -126,7 +120,6 @@ struct SettingsView: View {
                 }
                 }
 
-                // MARK: - Keyboard Shortcuts
 
                 if selectedCategory == .shortcuts {
                 Section("Keyboard Shortcuts") {
@@ -142,7 +135,6 @@ struct SettingsView: View {
                 }
                 }
 
-                // MARK: - Folders
 
                 if selectedCategory == .folders {
                 Section("Folders") {
@@ -169,7 +161,6 @@ struct SettingsView: View {
                 }
                 }
 
-                // MARK: - Themes
 
                 if selectedCategory == .themes {
                 Section("Themes") {
@@ -202,7 +193,6 @@ struct SettingsView: View {
                 }
                 }
 
-                // MARK: - Rotation Controls
 
                 if selectedCategory == .rotation {
                 Section("Rotation") {
@@ -224,7 +214,6 @@ struct SettingsView: View {
                 }
                 }
 
-                // MARK: - Save
 
                 if selectedCategory == .general {
                     Section {
@@ -238,8 +227,6 @@ struct SettingsView: View {
             .frame(minWidth: 520, minHeight: 560)
         }
         .navigationSplitViewStyle(.balanced)
-        // Escape closes the Settings window (unless a shortcut is being recorded,
-        // in which case the recorder consumes Escape to cancel).
         .overlay(
             Button("") { dismiss() }
                 .keyboardShortcut(.escape, modifiers: [])
@@ -274,11 +261,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Shortcut Recorder
 
-/// Click-to-record keyboard shortcut field. Emits an accelerator string
-/// compatible with `HotKeyManager.parseAccelerator` (modifier glyphs +
-/// letter/digit/F-key, e.g. "⌘⇧X").
 struct ShortcutRecorder: View {
     let label: String
     let shortcut: String?
@@ -314,10 +297,7 @@ struct ShortcutRecorder: View {
     }
 }
 
-// MARK: - Keyboard Capture
 
-/// Backs `ShortcutRecorder` with an `NSView` that captures key events via a
-/// local monitor while recording is active.
 struct KeyboardCaptureView: NSViewRepresentable {
     let isActive: Bool
     let onCommit: (String) -> Void
@@ -355,7 +335,6 @@ final class KeyboardCaptureHost: NSView {
 
     private var monitor: Any?
 
-    /// keyCode → function-key label, matching HotKeyManager.keyCodeForCharacter.
     private let functionKeys: [UInt16: String] = [
         122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5",
         97: "F6", 98: "F7", 100: "F8", 101: "F9", 109: "F10",
@@ -382,13 +361,11 @@ final class KeyboardCaptureHost: NSView {
     }
 
     private func handle(_ event: NSEvent) -> NSEvent? {
-        // Escape cancels recording (does not close the window).
         if event.keyCode == 53 {
             endCapturing()
             onCancel?()
             return nil
         }
-        // Backspace / Delete clears the shortcut.
         if event.keyCode == 51 || event.keyCode == 117 {
             endCapturing()
             onClear?()
@@ -404,14 +381,13 @@ final class KeyboardCaptureHost: NSView {
 
     private func comboString(for event: NSEvent) -> String? {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        // Requires at least one of ⌘/⌃/⌥ (shift-only is allowed in addition).
         guard flags.contains(.command) || flags.contains(.control) || flags.contains(.option) else { return nil }
 
         var result = ""
-        if flags.contains(.control) { result += "\u{2303}" }   // ⌃
-        if flags.contains(.option) { result += "\u{2325}" }  // ⌥
-        if flags.contains(.shift) { result += "\u{21E7}" }  // ⇧
-        if flags.contains(.command) { result += "\u{2318}" } // ⌘
+        if flags.contains(.control) { result += "\u{2303}" }
+        if flags.contains(.option) { result += "\u{2325}" }
+        if flags.contains(.shift) { result += "\u{21E7}" }
+        if flags.contains(.command) { result += "\u{2318}" }
 
         guard let glyph = keyGlyph(for: event) else { return nil }
         return result + glyph

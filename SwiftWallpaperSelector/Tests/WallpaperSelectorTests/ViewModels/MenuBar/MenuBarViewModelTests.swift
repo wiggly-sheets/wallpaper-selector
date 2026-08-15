@@ -8,11 +8,9 @@ final class MenuBarViewModelTests: XCTestCase {
     var viewModel: MenuBarViewModel!
 
     override func setUpWithError() throws {
-        // Create a real SettingsManager
         let settingsManager = SettingsManager()
         let wallpaperProvider = WallpaperProvider()
 
-        // Create real service instances for testing
         themeProvider = ThemeProvider(settingsManager: settingsManager)
         rotationService = RotationService(
             settingsManager: settingsManager,
@@ -20,14 +18,12 @@ final class MenuBarViewModelTests: XCTestCase {
             themeProvider: themeProvider
         )
 
-        // Create AppState
         appState = AppState(
             settingsManager: settingsManager,
             themeProvider: themeProvider,
             wallpaperProvider: wallpaperProvider
         )
 
-        // Create view model
         viewModel = MenuBarViewModel(
             appState: appState,
             rotationService: rotationService,
@@ -36,7 +32,6 @@ final class MenuBarViewModelTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        // Clean up
         rotationService.stop()
         appState = nil
         rotationService = nil
@@ -45,7 +40,6 @@ final class MenuBarViewModelTests: XCTestCase {
     }
 
     func testInitialState() {
-        // With no theme selected, menu title should be "All Folders"
         XCTAssertEqual(viewModel.menuTitle, "All Folders")
         XCTAssertFalse(viewModel.isRotationActive)
         XCTAssertNil(viewModel.selectedThemeID)
@@ -53,18 +47,14 @@ final class MenuBarViewModelTests: XCTestCase {
 
     func testShuffleAction() {
         viewModel.shuffle()
-        // Just verify it doesn't crash - the actual tick verification
-        // is harder to test without mocking
     }
 
     func testNextAction() {
         viewModel.next()
-        // Just verify it doesn't crash
     }
 
     func testPreviousAction() {
         viewModel.previous()
-        // Just verify it doesn't crash
     }
 
     func testOpenSettingsPostsNotification() {
@@ -74,9 +64,5 @@ final class MenuBarViewModelTests: XCTestCase {
     }
 
     func testQuitAction() {
-        // Terminate would kill the test process; instead verify the notification
-        // that the quit action is wired up via the view model (it posts nothing,
-        // so we just ensure it doesn't crash for an unconfigured quit path).
-        // NSApplication.shared.terminate is not called here to keep the test runner alive.
     }
 }

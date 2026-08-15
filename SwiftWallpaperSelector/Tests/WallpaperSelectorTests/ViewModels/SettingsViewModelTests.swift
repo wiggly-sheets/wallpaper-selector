@@ -1,7 +1,6 @@
 import XCTest
 @testable import WallpaperSelector
 
-// Minimal dummy wallpaper provider to satisfy AppState initializer.
 final class DummyWallpaperProvider: WallpaperSetting {
     private(set) var appliedURLs: [URL] = []
     private(set) var allScreenFlags: [Bool] = []
@@ -18,12 +17,9 @@ final class SettingsViewModelTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        // Create a fresh SettingsManager with default settings to avoid disk side effects.
         let settingsManager = SettingsManager()
-        // Reset to a clean settings model.
         settingsManager.replace(WallpaperSettings())
 
-        // Create AppState with dummy dependencies for testing
         let dummyProvider = DummyWallpaperProvider()
         appState = AppState(
             settingsManager: settingsManager,

@@ -1,8 +1,5 @@
 import AppKit
 
-/// Keeps Wallpaper Selector out of Dock and app switcher. This is runtime
-/// equivalent of Electron's `skipTaskbar` / menu-bar-only lifecycle and still
-/// lets windows become key when opened from menu bar or shortcut.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)

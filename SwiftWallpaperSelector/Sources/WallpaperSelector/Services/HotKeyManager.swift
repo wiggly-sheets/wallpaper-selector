@@ -1,28 +1,18 @@
 import Foundation
 import Carbon
 
-/// Manages global keyboard shortcuts using the Carbon `RegisterEventHotKey` API.
-///
-/// Reads shortcut definitions from `SettingsManager.settings.shortcuts` and
-/// registers/unregisters them when the settings change. Each hot-key triggers
-/// a user-defined action (show main window, show preview, open menu).
 final class HotKeyManager {
-    // MARK: - Public
 
-    /// The currently registered hot-key references, for deregistration.
     private(set) var registeredHotKeys: [EventHotKeyRef] = []
 
-    /// Closure called when a hot-key is pressed.
     var onHotKeyPressed: ((String) -> Void)?
 
-    // MARK: - Private
 
     private var settingsManager: SettingsManager
     private var eventHandlerUPP: EventHandlerUPP?
     private var eventHandler: EventHandlerRef?
     private var hotKeyIdentifiers: [UInt32: String] = [:]
 
-    // MARK: - Init
 
     init(settingsManager: SettingsManager) {
         self.settingsManager = settingsManager
@@ -34,9 +24,7 @@ final class HotKeyManager {
         if let eventHandler { RemoveEventHandler(eventHandler) }
     }
 
-    // MARK: - Public API
 
-    /// Register all hot-keys defined in the current settings.
     func register() {
         unregisterAll()
 
@@ -58,7 +46,6 @@ final class HotKeyManager {
         }
     }
 
-    /// Unregister all currently registered hot-keys.
     func unregisterAll() {
         for ref in registeredHotKeys {
             UnregisterEventHotKey(ref)
@@ -67,12 +54,10 @@ final class HotKeyManager {
         hotKeyIdentifiers = [:]
     }
 
-    /// Update hot-keys when settings change.
     func updateShortcuts() {
         register()
     }
 
-    // MARK: - Private
 
     private func registerHotKey(_ combo: KeyCombo, identifier: String) {
         var hotKeyRef: EventHotKeyRef?
@@ -94,11 +79,7 @@ final class HotKeyManager {
         }
     }
 
-    /// Parse a string like "⌘⇧S" or "⌃⌥P" into a `KeyCombo`.
-    /// Returns `nil` if the string cannot be parsed.
     func parseAccelerator(_ string: String) -> KeyCombo? {
-        // Existing Electron settings use token notation; native recorder stores
-        // compact glyph notation. Accept both so migration does not drop keys.
         let tokenized = string.split(separator: "+").map(String.init)
         if tokenized.count > 1 {
             var modifiers: UInt32 = 0
@@ -121,13 +102,13 @@ final class HotKeyManager {
 
         for scalar in string.unicodeScalars {
             switch scalar.value {
-            case 0x2318: // ⌘ Command
+            case 0x2318:
                 modifiers |= UInt32(cmdKey)
-            case 0x21E7: // ⇧ Shift
+            case 0x21E7:
                 modifiers |= UInt32(shiftKey)
-            case 0x2325: // ⌥ Option/Alt
+            case 0x2325:
                 modifiers |= UInt32(optionKey)
-            case 0x2303: // ⌃ Control
+            case 0x2303:
                 modifiers |= UInt32(controlKey)
             default:
                 keyName.unicodeScalars.append(scalar)
@@ -199,9 +180,7 @@ final class HotKeyManager {
     }
 }
 
-// MARK: - Supporting Types
 
-/// A parsed hot-key combination.
 struct KeyCombo {
     let keyCode: UInt16
     let modifiers: UInt32

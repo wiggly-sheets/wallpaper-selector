@@ -1,9 +1,6 @@
 import SwiftUI
 import AppKit
 
-/// The compact tray popover layout: header, theme selector, shuffle buttons,
-/// wallpaper grid, auto-rotate controls, and all-spaces switch.
-/// Matches PLAN §7.
 struct TrayPopoverView: View {
     @EnvironmentObject var viewModel: TrayPopoverViewModel
 
@@ -21,7 +18,6 @@ struct TrayPopoverView: View {
         .frame(width: 300, height: 528)
     }
 
-    // MARK: - Header
 
     private var headerView: some View {
         HStack(spacing: 8) {
@@ -44,7 +40,6 @@ struct TrayPopoverView: View {
         }
     }
 
-    // MARK: - Theme selector
 
     private var themeSelector: some View {
         Menu {
@@ -76,7 +71,6 @@ struct TrayPopoverView: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    // MARK: - Shuffle / Previous / Next
 
     private var shuffleControls: some View {
         HStack(spacing: 4) {
@@ -91,7 +85,6 @@ struct TrayPopoverView: View {
         !viewModel.images.isEmpty && !viewModel.isBusy
     }
 
-    // MARK: - Wallpaper grid
 
     private var gridView: some View {
         ScrollView {
@@ -116,7 +109,6 @@ struct TrayPopoverView: View {
         .frame(maxHeight: .infinity)
     }
 
-    // MARK: - Auto-rotate
 
     private var autoRotateSection: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -164,7 +156,6 @@ struct TrayPopoverView: View {
         viewModel.intervalMinutes != .off && !viewModel.themes.isEmpty
     }
 
-    // MARK: - All Spaces
 
     private var allSpacesSection: some View {
         Toggle(isOn: allSpacesBinding) {
@@ -186,7 +177,6 @@ struct TrayPopoverView: View {
         )
     }
 
-    // MARK: - Shared button
 
     private func rotateButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -198,7 +188,6 @@ struct TrayPopoverView: View {
     }
 }
 
-// MARK: - Preview Provider
 
 struct TrayPopoverView_Previews: PreviewProvider {
     static var previews: some View {

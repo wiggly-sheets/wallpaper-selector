@@ -10,7 +10,6 @@ struct ContentView: View {
                 .font(.title2)
                 .fontWeight(.bold)
 
-            // Status
             Text("Folders: \(settingsManager.settings.folderPaths.count)")
             Text("Themes: \(settingsManager.settings.themes.count)")
             Text("Rotation: \(settingsManager.settings.intervalMinutes.label)")
@@ -19,7 +18,6 @@ struct ContentView: View {
 
             Divider()
 
-            // Rotation controls
             HStack {
                 Text("Interval:")
                 Picker("Interval", selection: Binding(
@@ -46,21 +44,18 @@ struct ContentView: View {
                 .accessibilityLabel("Wallpaper rotation action picker")
             }
 
-            // Appearance controls
             Toggle("Match System Appearance", isOn: Binding(
                 get: { settingsManager.settings.matchSystemAppearance },
                 set: { val in settingsManager.update { $0.matchSystemAppearance = val } }
             ))
             .accessibilityLabel("Match system appearance toggle")
 
-            // All Spaces
             Toggle("All Spaces", isOn: Binding(
                 get: { settingsManager.settings.allSpaces },
                 set: { val in settingsManager.update { $0.allSpaces = val } }
             ))
             .accessibilityLabel("All spaces toggle")
 
-            // History limit
             HStack {
                 Text("History Limit:")
                 Picker("History Limit", selection: Binding(
@@ -77,7 +72,6 @@ struct ContentView: View {
 
             Divider()
 
-            // Buttons
             HStack {
                 Button("Shuffle") {
                     settingsManager.update { $0.rotationAction = .shuffle }

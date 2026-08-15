@@ -1,35 +1,24 @@
 import Foundation
 import Combine
 
-/// Manages persistent wallpaper settings stored as JSON in the Application Support directory.
-/// Watches the settings file for external changes and notifies observers via a Combine-like closure.
 final class SettingsManager: ObservableObject {
-    // MARK: - Public
 
-    /// The directory where settings are stored.
     static let defaultSettingsDirectory: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("WallpaperSelector", isDirectory: true)
     }()
 
-    /// The bundle identifier used for the Application Support subdirectory.
     static let bundleID = "com.wallpaper-selector.macos"
 
-    /// Directory and file currently backing this manager. A custom directory
-    /// survives restarts through a tiny UserDefaults locator; settings remain a
-    /// portable JSON file named `settings.json` inside that directory.
     private(set) var settingsDirectory: URL
     private(set) var settingsURL: URL
 
-    /// Current settings. Reading this property always returns the latest loaded/saved values.
     @Published private(set) var settings: WallpaperSettings = .init() {
         didSet { if !isLoading { save() } }
     }
 
-    /// Closure called whenever settings change on disk (external edit) or are saved locally.
     var onSettingsChanged: (() -> Void)?
 
-    // MARK: - Private
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private let fileManager = FileManager.default
@@ -37,7 +26,6 @@ final class SettingsManager: ObservableObject {
     private static let customDirectoryDefaultsKey = "WallpaperSelector.settingsDirectory"
     private var isLoading = false
 
-    // MARK: - Init
 
     init(settingsDirectory requestedDirectory: URL? = nil) {
         let storedDirectory = UserDefaults.standard.string(forKey: Self.customDirectoryDefaultsKey).map(URL.init(fileURLWithPath:))
@@ -53,9 +41,7 @@ final class SettingsManager: ObservableObject {
         stopFileWatcher()
     }
 
-    // MARK: - Public API
 
-    /// Update settings and persist immediately.
     func update(_ mutation: (inout WallpaperSettings) -> Void) {
         var newValue = self.settings
         mutation(&newValue)
@@ -63,14 +49,11 @@ final class SettingsManager: ObservableObject {
         onSettingsChanged?()
     }
 
-    /// Replace the entire settings object and persist.
     func replace(_ newSettings: WallpaperSettings) {
         settings = newSettings
         onSettingsChanged?()
     }
 
-    /// Move persisted settings to a user-selected folder. Does not delete the
-    /// former copy, making relocation recoverable if the new folder disappears.
     func relocateSettings(to directory: URL) throws {
         let normalized = directory.standardizedFileURL
         guard normalized.path != settingsDirectory.path else { return }
@@ -85,16 +68,12 @@ final class SettingsManager: ObservableObject {
         onSettingsChanged?()
     }
 
-    /// Return to the default Application Support location while retaining a
-    /// copy in any former custom folder.
     func useDefaultSettingsLocation() throws {
         try relocateSettings(to: Self.defaultSettingsDirectory)
         UserDefaults.standard.removeObject(forKey: Self.customDirectoryDefaultsKey)
     }
 
-    // MARK: - Legacy Migration
 
-    /// Migrate settings from the legacy Electron/Glaze location on first launch.
     private func migrateFromLegacyIfNeeded() {
         guard let legacyURL = Self.legacySettingsURL else { return }
         guard fileManager.fileExists(atPath: legacyURL.path) else { return }
@@ -111,7 +90,6 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    /// The legacy Electron settings file path.
     private static var legacySettingsURL: URL? {
         guard let home = FileManager.default.urls(for: .userDirectory, in: .userDomainMask).first else {
             return nil
@@ -119,7 +97,6 @@ final class SettingsManager: ObservableObject {
         return home.appendingPathComponent(".wallpaper-selector/settings.json")
     }
 
-    // MARK: - Persistence
 
     private func ensureDirectoryExists() {
         try? fileManager.createDirectory(
@@ -131,7 +108,6 @@ final class SettingsManager: ObservableObject {
 
     private func load() {
         guard fileManager.fileExists(atPath: settingsURL.path) else {
-            // First launch — save defaults
             save()
             return
         }
@@ -158,7 +134,6 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    // MARK: - File Watcher
 
     private func startFileWatcher() {
         let fd = open(settingsURL.path, O_EVTONLY)
@@ -183,11 +158,8 @@ final class SettingsManager: ObservableObject {
     }
 
     private func handleExternalChange() {
-        // Debounce: wait a brief moment for writes to finish
         queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             guard let self = self else { return }
-            // Atomic JSON writes replace the file, invalidating the watched
-            // descriptor. Reopen it so subsequent external edits still sync.
             self.stopFileWatcher()
             self.load()
             self.startFileWatcher()

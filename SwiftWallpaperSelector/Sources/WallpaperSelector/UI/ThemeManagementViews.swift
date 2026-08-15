@@ -1,7 +1,6 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Add Folder View
 
 struct AddFolderView: View {
     let onAdd: (String) -> Void
@@ -37,7 +36,6 @@ struct AddFolderView: View {
     }
 }
 
-// MARK: - Edit Folder View
 
 struct EditFolderView: View {
     let folderPath: String
@@ -69,15 +67,12 @@ struct EditFolderView: View {
                     if FileManager.default.fileExists(atPath: editedFolderPath) {
                         panel.directoryURL = URL(fileURLWithPath: editedFolderPath).deletingLastPathComponent()
                     } else {
-                        // Default to home directory if current path invalid
                         let homeURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                         if FileManager.default.fileExists(atPath: homeURL.path) {
-                            // Check if it's actually a directory
                             var isDir: ObjCBool = false
                             if FileManager.default.fileExists(atPath: homeURL.path, isDirectory: &isDir) && isDir.boolValue {
                                 panel.directoryURL = homeURL
                             } else {
-                                // Fall back to root of home dir
                                 let homeDirURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                                 if FileManager.default.fileExists(atPath: homeDirURL.path) {
                                     var isDir2: ObjCBool = false
@@ -114,7 +109,6 @@ struct EditFolderView: View {
     }
 }
 
-// MARK: - Add Theme View
 
 struct AddThemeView: View {
     let onAdd: (Theme) -> Void
@@ -201,7 +195,6 @@ struct AddThemeView: View {
     }
 }
 
-// MARK: - Edit Theme View
 
 struct EditThemeView: View {
     let theme: Theme
@@ -299,7 +292,6 @@ struct EditThemeView: View {
     }
 }
 
-// MARK: - Folder Picker View
 
 struct FolderPickerView: View {
     @Binding var selectedFolders: [String]
@@ -339,7 +331,7 @@ struct FolderPickerView: View {
                     Spacer()
 
                     Button("Choose") {
-                        selectedFolders = Array(Set(selectedFolders)) // Remove duplicates
+                        selectedFolders = Array(Set(selectedFolders))
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
@@ -369,7 +361,6 @@ struct FolderPickerView: View {
     private func loadFolders() {
         isLoading = true
         DispatchQueue.global(qos: .background).async {
-            // Common system folders
             let homeDir = FileManager.default.homeDirectoryForCurrentUser
             let commonPaths = [
                 homeDir.path,
@@ -384,7 +375,6 @@ struct FolderPickerView: View {
                 return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
             }
 
-            // User's home folder contents (directories only)
             let allContents = (try? FileManager.default.contentsOfDirectory(
                 at: homeDir,
                 includingPropertiesForKeys: nil,

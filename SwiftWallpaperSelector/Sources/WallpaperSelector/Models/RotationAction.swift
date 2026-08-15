@@ -1,6 +1,5 @@
 import Foundation
 
-/// Which action the rotation timer performs on each tick.
 public enum RotationAction: String, Codable, Equatable, CaseIterable {
     case shuffle = "shuffle"
     case next = "next"

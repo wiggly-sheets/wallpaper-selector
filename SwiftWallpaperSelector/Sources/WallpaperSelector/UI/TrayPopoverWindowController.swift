@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-// Global notification names for communication from popover to services
 extension Notification.Name {
     static let ShuffleRequested = Notification.Name("ShuffleRequested")
     static let NextRequested = Notification.Name("NextRequested")
@@ -9,9 +8,6 @@ extension Notification.Name {
     static let OpenMainWindowRequested = Notification.Name("OpenMainWindowRequested")
 }
 
-/// Window controller for the compact tray popover.
-/// Owns the popover view, the shared tray `statusItem` (for anchoring),
-/// and auto-hides on blur per PLAN §7.
 final class TrayPopoverWindowController: NSWindowController {
     private var statusItem: NSStatusItem?
 
@@ -19,7 +15,6 @@ final class TrayPopoverWindowController: NSWindowController {
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
 
-    // MARK: - Init
 
     convenience init(
         statusItem: NSStatusItem?,
@@ -73,7 +68,6 @@ final class TrayPopoverWindowController: NSWindowController {
             NotificationCenter.default.post(name: .OpenMainWindowRequested, object: nil)
         }
 
-        // Auto-hide when the popover loses focus.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(windowDidResignKey(_:)),
@@ -87,7 +81,6 @@ final class TrayPopoverWindowController: NSWindowController {
         NotificationCenter.default.removeObserver(self)
     }
 
-    // MARK: - Presenting
 
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
@@ -97,8 +90,6 @@ final class TrayPopoverWindowController: NSWindowController {
         let screen = statusItem?.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let screenFrame = screen?.visibleFrame else { return }
 
-        // Anchor centered under the tray icon (+4px below); fall back to the
-        // top-right corner when the tray bounds are unavailable.
         let origin: CGPoint
         if let buttonFrame = statusItem?.button?.window?.frame {
             origin = CGPoint(x: buttonFrame.midX - width / 2, y: buttonFrame.minY - height - 4)
@@ -115,7 +106,6 @@ final class TrayPopoverWindowController: NSWindowController {
         installOutsideClickMonitors()
     }
 
-    // MARK: - Blur handling
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === self.window else { return }

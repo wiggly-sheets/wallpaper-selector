@@ -1,27 +1,17 @@
 import Foundation
 import AppKit
 
-// MARK: - AppearanceMonitor
 
-/// Observes system appearance changes and applies the appropriate
-/// light/dark wallpaper when `matchSystemAppearance` is enabled.
-///
-/// Uses KVO on `NSApplication.effectiveAppearance` to detect
-/// appearance changes, since there is no dedicated notification.
 final class AppearanceMonitor: NSObject {
-    // MARK: - Public
 
-    /// Closure called when the wallpaper should be changed due to an appearance change.
     var onAppearanceChanged: ((String?) -> Void)?
 
-    // MARK: - Private
 
     private let settingsManager: SettingsManager
     private let wallpaperProvider: WallpaperSetting
     private let themeProvider: ThemeProvider
     private var observation: NSKeyValueObservation?
 
-    // MARK: - Init
 
     init(
         settingsManager: SettingsManager,
@@ -33,7 +23,6 @@ final class AppearanceMonitor: NSObject {
         self.themeProvider = themeProvider
         super.init()
 
-        // Observe effectiveAppearance changes on NSApplication
         observation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             self?.applyAppearanceWallpaperIfNeeded()
         }
@@ -43,10 +32,7 @@ final class AppearanceMonitor: NSObject {
         observation = nil
     }
 
-    // MARK: - Public API
 
-    /// Check the current appearance and apply the appropriate wallpaper
-    /// if `matchSystemAppearance` is enabled.
     func applyAppearanceWallpaperIfNeeded() {
         let settings = settingsManager.settings
         guard settings.matchSystemAppearance else { return }
@@ -59,13 +45,11 @@ final class AppearanceMonitor: NSObject {
         }
         let (lightWallpaper, darkWallpaper) = themeProvider.effectiveAppearanceWallpapers(isDarkAppearance: isDark)
 
-        // Select the appropriate wallpaper based on current appearance
         let selectedPath = isDark ? darkWallpaper : lightWallpaper
 
         if let path = selectedPath, path.hasPrefix("/"), path != settingsManager.settings.currentWallpaper {
             applyWallpaper(at: URL(fileURLWithPath: path))
         } else if themeChanged {
-            // Fall back to a random image from the current scope
             let folders = themeProvider.effectiveFolders()
             if let randomURL = randomWallpaperURL(from: folders) {
                 applyWallpaper(at: randomURL)
@@ -73,7 +57,6 @@ final class AppearanceMonitor: NSObject {
         }
     }
 
-    // MARK: - Private
 
     private func applyWallpaper(at url: URL) {
         do {

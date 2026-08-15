@@ -2,7 +2,6 @@ import XCTest
 @testable import WallpaperSelector
 
 final class WallpaperProviderTests: XCTestCase {
-    // MARK: - Mock provider
 
     func testMockProviderRecordsCalls() {
         let mock = MockWallpaperProvider()
@@ -41,14 +40,10 @@ final class WallpaperProviderTests: XCTestCase {
         XCTAssertFalse(mock.throwError)
     }
 
-    // MARK: - Real provider error cases
 
     func testRealProviderThrowsNoMainScreen() {
         let provider = WallpaperProvider()
         let url = URL(fileURLWithPath: "/tmp/nonexistent-wallpaper.jpg")
-        // When there's no main screen (or the file doesn't exist), the provider
-        // should throw rather than crash. We can't guarantee a main screen in
-        // the test environment, so we just verify it throws an error.
         XCTAssertThrowsError(try provider.setWallpaper(url, forAllScreens: false))
     }
 }

@@ -1,8 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// A hidden SwiftUI view that hosts the MenuBarController.
-/// This is used as a WindowGroup scene to keep the menu-bar extra alive.
 struct MenuBarHost: NSViewControllerRepresentable {
     let appState: AppState
     let rotationService: RotationService
@@ -19,7 +17,6 @@ struct MenuBarHost: NSViewControllerRepresentable {
     }
 }
 
-/// An NSViewController that owns the MenuBarController.
 final class MenuBarHostingViewController: NSViewController {
     var appState: AppState
     var rotationService: RotationService
@@ -89,7 +86,6 @@ final class MenuBarHostingViewController: NSViewController {
         self.menuBarController = controller
         controller.rebuildMenu()
 
-        // Register hotkeys
         let hotKeyManager = HotKeyManager(settingsManager: appState.settingsManager)
         hotKeyManager.onHotKeyPressed = { [weak self] identifier in
             self?.handleHotKey(identifier)
@@ -97,14 +93,11 @@ final class MenuBarHostingViewController: NSViewController {
         hotKeyManager.register()
         self.hotKeyManager = hotKeyManager
 
-        // Register launch-at-login
         let loginManager = LaunchAtLoginManager()
         self.launchAtLoginManager = loginManager
 
-        // Apply appearance wallpaper on launch if needed
         appearanceMonitor?.applyAppearanceWallpaperIfNeeded()
 
-        // Observe notifications from the popover
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleShuffleRequested),
@@ -148,8 +141,6 @@ final class MenuBarHostingViewController: NSViewController {
             object: nil
         )
 
-        // Match original first-run behavior: stay menu-bar-only once folders
-        // exist, but immediately show folder setup for a fresh install.
         if appState.settings.folderPaths.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.showMainWindow() }
         }
@@ -159,7 +150,6 @@ final class MenuBarHostingViewController: NSViewController {
         NotificationCenter.default.removeObserver(self)
     }
 
-    // MARK: - Actions
 
     private func showMainWindow() {
         if let existingWindow = NSApp.windows.first(where: { $0.title == "Wallpaper Selector" }) {
@@ -262,7 +252,6 @@ final class MenuBarHostingViewController: NSViewController {
 
     @objc private func handleApplyRecentWallpaper(_ notification: Notification) {
         if let path = notification.object as? String {
-            // Apply the wallpaper directly
             appState.setWallpaper(path)
         }
     }

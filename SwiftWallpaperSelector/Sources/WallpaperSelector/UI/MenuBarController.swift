@@ -2,45 +2,30 @@ import AppKit
 import SwiftUI
 import Combine
 
-/// A thin menu-bar controller that delegates all business logic to `MenuBarViewModel`.
-/// This class only handles UI plumbing: creating the status item, building menus,
-/// and forwarding menu callbacks to the view model.
 final class MenuBarController: NSObject {
-    // MARK: - Public Properties
 
-    /// The status item shown in the menu bar.
     private(set) var statusItem: NSStatusItem?
 
-    /// Callback for showing the main window.
     var onShowMainWindow: (() -> Void)?
 
-    /// Callback for showing the popover.
     var onShowPreview: (() -> Void)?
 
-    /// Callback for opening settings.
     var onOpenSettings: (() -> Void)?
 
-    /// Callback for shuffle action.
     var onShuffle: (() -> Void)?
 
-    /// Callback for next wallpaper action.
     var onNext: (() -> Void)?
 
-    /// Callback for previous wallpaper action.
     var onPrevious: (() -> Void)?
 
-    /// Callback for toggling all spaces.
     var onToggleAllSpaces: ((Bool) -> Void)?
 
-    /// Callback for toggling match system appearance.
     var onToggleMatchSystemAppearance: ((Bool) -> Void)?
 
-    // MARK: - Private State
 
     private let viewModel: MenuBarViewModel
     private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - Init
 
     init(viewModel: MenuBarViewModel) {
         self.viewModel = viewModel
@@ -49,28 +34,23 @@ final class MenuBarController: NSObject {
         observeViewModelChanges()
     }
 
-    // MARK: - Public API
 
-    /// Rebuild the menu-bar menu based on current view model state.
     func rebuildMenu() {
         guard let statusItem = statusItem else { return }
 
         let menu = NSMenu(title: "Wallpaper Selector")
 
-        // Current status display
         let statusMenuItem = NSMenuItem(title: viewModel.menuTitle, action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        // Open Main Window
         let openMainItem = NSMenuItem(title: "Open Main Window", action: #selector(showMainWindow(_:)), keyEquivalent: "")
         openMainItem.target = self
         openMainItem.image = symbol("photo.on.rectangle.angled")
         menu.addItem(openMainItem)
 
-        // Preview Wallpapers
         let previewItem = NSMenuItem(title: "Preview Wallpapers", action: #selector(togglePopover(_:)), keyEquivalent: "")
         previewItem.target = self
         previewItem.isEnabled = !viewModel.folderPaths.isEmpty
@@ -79,7 +59,6 @@ final class MenuBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Rotation controls
         let rotationTitle = viewModel.isRotationActive ? "Stop Rotation" : "Start Rotation"
         let rotationItem = NSMenuItem(title: rotationTitle, action: #selector(toggleRotation(_:)), keyEquivalent: "")
         rotationItem.target = self
@@ -87,18 +66,15 @@ final class MenuBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Quick actions
         menu.addItem(NSMenuItem(title: "Shuffle", action: #selector(shuffle(_:)), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Next Wallpaper", action: #selector(next(_:)), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Previous Wallpaper", action: #selector(previous(_:)), keyEquivalent: ""))
 
         menu.addItem(NSMenuItem.separator())
 
-        // Recent wallpapers submenu
         if !viewModel.recentWallpapers.isEmpty {
             let recentMenu = NSMenu(title: "Recent Wallpapers")
 
-            // Limit to most recent 10 items to prevent overly long menu
             let displayedRecents = Array(viewModel.recentWallpapers.prefix(10))
 
             for (index, path) in displayedRecents.enumerated() {
@@ -118,7 +94,6 @@ final class MenuBarController: NSObject {
             menu.addItem(NSMenuItem.separator())
         }
 
-        // Rotate submenu
         if let rotateMenu = buildRotateSubmenu() {
             let rotateItem = NSMenuItem(title: "Rotate", action: nil, keyEquivalent: "")
             rotateItem.image = symbol("arrow.triangle.2.circlepath")
@@ -126,7 +101,6 @@ final class MenuBarController: NSObject {
             menu.addItem(rotateItem)
         }
 
-        // Theme submenu
         if let themeMenu = buildThemeSubmenu() {
             let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
             themeItem.image = symbol("paintpalette")
@@ -136,14 +110,12 @@ final class MenuBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Apply to All Spaces
         let allSpacesItem = NSMenuItem(title: "Apply to All Spaces (opens macOS Settings)", action: #selector(toggleAllSpaces(_:)), keyEquivalent: "")
         allSpacesItem.target = self
         allSpacesItem.state = viewModel.allSpaces ? .on : .off
         allSpacesItem.image = symbol("rectangle.stack")
         menu.addItem(allSpacesItem)
 
-        // Match System Appearance
         let appearanceItem = NSMenuItem(title: "Match System Appearance", action: #selector(toggleMatchAppearance(_:)), keyEquivalent: "")
         appearanceItem.target = self
         appearanceItem.state = viewModel.matchSystemAppearance ? .on : .off
@@ -152,7 +124,6 @@ final class MenuBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Settings and Quit
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: "")
         settingsItem.image = symbol("gearshape")
         menu.addItem(settingsItem)
@@ -166,12 +137,10 @@ final class MenuBarController: NSObject {
         statusItem.menu = menu
     }
 
-    /// Builds the "Rotate" submenu of interval and action radio items.
     private func buildRotateSubmenu() -> NSMenu? {
         let submenu = NSMenu(title: "Rotate")
         let controlsDisabled = viewModel.matchSystemAppearance
 
-        // Interval radios
         let intervals: [(RotationInterval, String)] = [
             (.off, "Off"),
             (.minutes30, "Every 30 Minutes"),
@@ -194,7 +163,6 @@ final class MenuBarController: NSObject {
         onIntervalLabel.isEnabled = false
         submenu.addItem(onIntervalLabel)
 
-        // Action radios (theme actions tinted with the accent color)
         let themeActions: Set<RotationAction> = [.themeShuffle, .themeNext, .themePrevious]
         let actions: [(RotationAction, String)] = [
             (.shuffle, "shuffle"),
@@ -218,8 +186,6 @@ final class MenuBarController: NSObject {
         return submenu
     }
 
-    /// Builds the theme submenu. "All Folders" and the themes form one
-    /// contiguous radio group with no separator between them.
     private func buildThemeSubmenu() -> NSMenu? {
         let submenu = NSMenu(title: "Theme")
 
@@ -241,7 +207,6 @@ final class MenuBarController: NSObject {
         return submenu
     }
 
-    /// Returns an SF Symbol image, optionally tinted with the given color.
     private func symbol(_ name: String, colored color: NSColor? = nil) -> NSImage? {
         guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return nil }
         guard let color = color else { return base }
@@ -249,7 +214,6 @@ final class MenuBarController: NSObject {
         return base.withSymbolConfiguration(config)
     }
 
-    // MARK: - Private
 
     private func createStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -263,15 +227,12 @@ final class MenuBarController: NSObject {
     }
 
     private func observeViewModelChanges() {
-        // Rebuild the menu whenever any published property changes (themes,
-        // recents, rotation action, active theme, all spaces, appearance, etc.).
         viewModel.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.rebuildMenu() }
             .store(in: &cancellables)
     }
 
-    // MARK: - Actions
 
     @objc private func showMainWindow(_ sender: Any?) {
         onShowMainWindow?()
@@ -282,7 +243,6 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func toggleRotation(_ sender: Any?) {
-        // Rotation toggle logic is handled by the service via AppState
         viewModel.toggleRotation()
     }
 
@@ -299,7 +259,6 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func selectTheme(_ sender: NSMenuItem?) {
-        // The "All Folders" item carries no representedObject.
         let themeID = sender?.representedObject as? String
         viewModel.selectTheme(themeID)
     }
@@ -324,11 +283,7 @@ final class MenuBarController: NSObject {
 
     @objc private func selectRecentWallpaper(_ sender: NSMenuItem?) {
         if let path = sender?.representedObject as? String {
-            // Apply the selected recent wallpaper
             if FileManager.default.fileExists(atPath: path) {
-                // Find the AppState from the view model to call setWallpaper
-                // We need to access appState through a different approach since MenuBarController doesn't have direct access
-                // Instead, we'll post a notification that the AppCoordinator can handle
                 NotificationCenter.default.post(name: .ApplyRecentWallpaper, object: path)
             }
         }
@@ -339,7 +294,6 @@ final class MenuBarController: NSObject {
     }
 }
 
-// MARK: - Notification Names
 
 extension Notification.Name {
     static let PopoverShowRequested = Notification.Name("PopoverShowRequested")

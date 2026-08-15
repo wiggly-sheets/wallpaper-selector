@@ -1,6 +1,5 @@
 import Foundation
 
-/// The full settings model persisted to JSON.
 public struct WallpaperSettings: Codable, Equatable {
     public var folderPaths: [String]
     public var currentWallpaper: String?
@@ -52,11 +51,8 @@ public struct WallpaperSettings: Codable, Equatable {
         self.wallpaperHistory = wallpaperHistory
     }
 
-    // Keep disk schema byte-for-byte compatible with Electron settings. Swift
-    // naming uses `ID`; Electron persisted `Id`, and synthesized Codable would
-    // otherwise make existing users appear to have default settings.
     private enum CodingKeys: String, CodingKey {
-        case folderPath // legacy single-folder schema
+        case folderPath
         case folderPaths, currentWallpaper, intervalMinutes, rotationAction, allSpaces
         case shortcuts, themes, activeThemeId, matchSystemAppearance
         case allFoldersLightWallpaper, allFoldersDarkWallpaper

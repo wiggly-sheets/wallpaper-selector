@@ -1,13 +1,11 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Main Picker Window with Custom Toolbar
 
 struct PickerWindow: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject var appState: AppState
 
-    // State for presenting dialogs
     @State private var showingRotationDialog = false
     @State private var showingAppearanceDialog = false
     @State private var showingFoldersDialog = false
@@ -15,9 +13,7 @@ struct PickerWindow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Custom Toolbar
             HStack {
-                // Title
                 VStack(alignment: .leading, spacing: 2) {
                     Text(folderTitle)
                         .font(.title3)
@@ -31,10 +27,8 @@ struct PickerWindow: View {
 
                 Spacer()
 
-                // Theme Selector
                 ThemeSelectorPopup()
 
-                // All Spaces Toggle
                 Toggle(isOn: $settingsViewModel.allSpaces) {
                     Label("All Spaces", systemImage: "rectangle.stack")
                         .help("Opens macOS Wallpaper settings — turn on 'Show on all Spaces' there")
@@ -44,12 +38,10 @@ struct PickerWindow: View {
                 .onChange(of: settingsViewModel.allSpaces) { newValue in
                     settingsViewModel.setAllSpaces(newValue)
                     if newValue {
-                        // Open macOS Wallpaper settings when All Spaces is enabled
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!)
                     }
                 }
 
-                // Button Group: Previous, Shuffle, Next
                 HStack(spacing: 4) {
                     Button(action: { appState.applyPreviousWallpaper() }) {
                         Image(systemName: "chevron.left")
@@ -70,34 +62,28 @@ struct PickerWindow: View {
                     .disabled(!settingsViewModel.hasFolders || appState.isRotationBusy)
                 }
 
-                // Rotation... Button
                 Button(action: { showingRotationDialog = true }) {
                     Label("Rotation…", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.borderless)
                 .disabled(settingsViewModel.matchSystemAppearance)
 
-                // Appearance... Button
                 Button(action: { showingAppearanceDialog = true }) {
                     Label("Appearance…", systemImage: "circle.lefthalf.filled")
                 }
                 .buttonStyle(.borderless)
 
-                // Folders... Button
                 Button(action: { showingFoldersDialog = true }) {
                     Label("Folders…", systemImage: "folder")
                 }
                 .buttonStyle(.borderless)
 
-                // Themes... Button
                 Button(action: { showingThemesDialog = true }) {
                     Label("Themes…", systemImage: "paintpalette")
                 }
                 .buttonStyle(.borderless)
 
-                // Settings Button
                 Button(action: {
-                    // Post notification to open settings window
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
                 }) {
                     Label("Settings", systemImage: "gearshape")
@@ -110,11 +96,9 @@ struct PickerWindow: View {
             .background(Color(NSColor.windowBackgroundColor))
             .divider()
 
-            // Main Content
             ScrollView {
                 VStack(spacing: 0) {
                     if settingsViewModel.folderPaths.isEmpty {
-                        // Empty state: no folders
                         VStack(spacing: 16) {
                             Image(systemName: "folder")
                                 .font(.system(size: 40))
@@ -132,7 +116,6 @@ struct PickerWindow: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding()
                     } else if appState.currentThemeImages.isEmpty {
-                        // Empty state: theme has no images
                         VStack(spacing: 16) {
                             Image(systemName: "photo")
                                 .font(.system(size: 40))
@@ -150,7 +133,6 @@ struct PickerWindow: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding()
                     } else {
-                        // Grid of thumbnails
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 16)], spacing: 16) {
                             ForEach(appState.currentThemeImages, id: \.self) { url in
                                 WallpaperThumbnail(imageURL: url)
@@ -210,7 +192,6 @@ struct PickerWindow: View {
         }
     }
 
-    // MARK: - Computed Properties
 
     private var folderTitle: String {
         let folders = settingsViewModel.folderPaths
@@ -228,7 +209,6 @@ struct PickerWindow: View {
     }
 }
 
-// MARK: - Supporting Views
 
 struct ThemeSelectorPopup: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
@@ -309,7 +289,6 @@ struct WallpaperThumbnail: View {
     }
 }
 
-// MARK: - Dialogs
 
 struct RotationDialog: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
@@ -350,14 +329,12 @@ struct RotationDialog: View {
                     .padding(.top, 4)
 
                 Picker("Action", selection: $settingsViewModel.rotationAction) {
-                    // Wallpaper actions
                     Group {
                         Text("Shuffle Wallpaper").tag(RotationAction.shuffle)
                         Text("Next Wallpaper").tag(RotationAction.next)
                         Text("Previous Wallpaper").tag(RotationAction.previous)
                     }
                     .divider()
-                    // Theme actions
                     Group {
                         Text("Shuffle Theme").tag(RotationAction.themeShuffle)
                         Text("Next Theme").tag(RotationAction.themeNext)
@@ -372,7 +349,6 @@ struct RotationDialog: View {
             .padding(.horizontal)
 
             Button(action: {
-                // Apply settings and restart rotation
                 appState.updateRotationSettings()
                 dismiss()
             }) {
@@ -485,7 +461,6 @@ struct AppearanceDialog: View {
             .padding(.horizontal)
 
             Button(action: {
-                // Save appearance settings
                 settingsViewModel.setAppearanceOverrides(
                     lightThemeID: lightThemeID,
                     darkThemeID: darkThemeID,
@@ -503,7 +478,6 @@ struct AppearanceDialog: View {
         .padding()
         .frame(width: 420)
         .onAppear {
-            // Initialize form values
             lightThemeID = settingsViewModel.appearanceLightThemeID
             darkThemeID = settingsViewModel.appearanceDarkThemeID
             lightWallpaper = settingsViewModel.allFoldersLightWallpaper
@@ -583,7 +557,6 @@ struct FoldersDialog: View {
                 EditFolderView(
                     folderPath: folderToEdit,
                     onUpdate: { newPath in
-                        // For edit, we just update the folder path (remove old, add new)
                         settingsViewModel.removeFolder(folderToEdit)
                         settingsViewModel.addFolder(newPath)
                     }
@@ -736,7 +709,6 @@ struct ThemesDialog: View {
     }
 }
 
-// MARK: - Extensions
 
 extension Notification.Name {
     static let openSettingsWindow = Notification.Name("openSettingsWindow")

@@ -1,24 +1,13 @@
 import Foundation
 import AppKit
 
-// MARK: - Protocol
 
-/// Protocol for setting desktop wallpapers, enabling mock injection in tests.
 protocol WallpaperSetting {
-    /// Set the wallpaper at `url` on a single screen or on all attached screens.
     func setWallpaper(_ url: URL, forAllScreens: Bool) throws
 }
 
-// MARK: - Concrete Provider
 
-/// Sets the desktop wallpaper using `NSWorkspace.shared.setDesktopImageURL(_:for:options:)`.
 final class WallpaperProvider: WallpaperSetting {
-    /// Set the wallpaper at `url` on a single screen or on all attached screens.
-    /// - Parameters:
-    ///   - url: The file URL of the wallpaper image (must be a valid image file).
-    ///   - forAllScreens: When `true`, applies the wallpaper to every attached display.
-    /// - Throws: An error if the wallpaper cannot be set on any screen.
-    /// Get the currently set wallpaper URL for the main screen.
     func currentWallpaperURL() -> URL? {
         let workspace = NSWorkspace.shared
         guard let screen = NSScreen.main else { return nil }
@@ -55,7 +44,6 @@ final class WallpaperProvider: WallpaperSetting {
     }
 }
 
-// MARK: - Errors
 
 enum WallpaperProviderError: Error, LocalizedError {
     case noMainScreen
@@ -69,9 +57,7 @@ enum WallpaperProviderError: Error, LocalizedError {
     }
 }
 
-// MARK: - Mock Provider (for testing)
 
-/// A mock `WallpaperSetting` that records calls for verification in unit tests.
 final class MockWallpaperProvider: WallpaperSetting {
     private(set) var calls: [(url: URL, forAllScreens: Bool)] = []
     var throwError: Bool = false

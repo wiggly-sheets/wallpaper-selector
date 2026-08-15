@@ -6,7 +6,7 @@ final class HotKeyManagerTests: XCTestCase {
         let manager = HotKeyManager(settingsManager: SettingsManager())
         let combo = manager.parseAccelerator("CommandOrControl+Shift+S")
 
-        XCTAssertEqual(combo?.keyCode, 1) // ANSI S, not alphabet index 18.
+        XCTAssertEqual(combo?.keyCode, 1)
         XCTAssertNotNil(combo)
     }
 

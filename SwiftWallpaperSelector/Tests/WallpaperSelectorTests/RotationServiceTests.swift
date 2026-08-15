@@ -2,7 +2,6 @@ import XCTest
 @testable import WallpaperSelector
 
 final class RotationServiceTests: XCTestCase {
-    // MARK: - Fixtures
 
     private var settingsManager: SettingsManager!
     private var mockProvider: MockWallpaperProvider!
@@ -30,7 +29,6 @@ final class RotationServiceTests: XCTestCase {
         super.tearDown()
     }
 
-    // MARK: - Timer lifecycle
 
     func testStartWhenIntervalIsSetAndAppearanceMatchingOff() {
         settingsManager.update { s in
@@ -74,12 +72,10 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertFalse(rotationService.isRunning)
     }
 
-    // MARK: - Rotation actions
 
     func testShuffleSelectsFromAvailableImages() {
         let folder = NSTemporaryDirectory()
         let fileURL = URL(fileURLWithPath: folder).appendingPathComponent("test_shuffle.png")
-        // Create a dummy file
         try? "dummy".write(to: fileURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: fileURL) }
 
@@ -92,7 +88,6 @@ final class RotationServiceTests: XCTestCase {
 
         rotationService.tick()
 
-        // The mock should have recorded a call
         XCTAssertFalse(mockProvider.calls.isEmpty)
     }
 
@@ -120,7 +115,6 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertFalse(mockProvider.calls.isEmpty)
     }
 
-    // MARK: - History
 
     func testHistoryAvoidsImmediateRepeat() {
         let folder = NSTemporaryDirectory()
@@ -140,8 +134,6 @@ final class RotationServiceTests: XCTestCase {
 
         rotationService.tick()
 
-        // The history should prevent the same image from being selected again
-        // (unless it's the only image available)
         let lastCall = mockProvider.calls.last
         XCTAssertNotNil(lastCall)
     }

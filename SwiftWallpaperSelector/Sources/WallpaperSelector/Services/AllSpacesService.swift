@@ -1,8 +1,6 @@
 import AppKit
 import ApplicationServices
 
-/// Controls macOS's separate “Show on all Spaces” preference. NSWorkspace
-/// applies a wallpaper to displays but cannot change this virtual-space option.
 final class AllSpacesService {
     private let wallpaperSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!
     private var lastAppliedValue: Bool?

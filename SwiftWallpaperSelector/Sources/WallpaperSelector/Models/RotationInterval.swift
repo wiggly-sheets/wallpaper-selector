@@ -1,6 +1,5 @@
 import Foundation
 
-/// Rotation interval in minutes. 0 means rotation is off.
 public enum RotationInterval: Int, Codable, Equatable, CaseIterable {
     case off = 0
     case minutes30 = 30

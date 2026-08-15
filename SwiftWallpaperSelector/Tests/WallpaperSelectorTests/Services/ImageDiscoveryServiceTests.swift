@@ -2,7 +2,6 @@ import XCTest
 @testable import WallpaperSelector
 
 final class ImageDiscoveryServiceTests: XCTestCase {
-    // MARK: - Helpers
     private func createTempFolder() throws -> URL {
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
         let folder = tempDir.appendingPathComponent(UUID().uuidString)
@@ -15,21 +14,18 @@ final class ImageDiscoveryServiceTests: XCTestCase {
         try "dummy".write(to: fileURL, atomically: true, encoding: .utf8)
     }
 
-    // MARK: - Tests
     func testCollectImageURLsReturnsOnlyImages() throws {
         let folder = try createTempFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
 
-        // Create a mix of image and non-image files
         try createFile(at: folder, name: "a.png")
         try createFile(at: folder, name: "b.jpg")
         try createFile(at: folder, name: "c.txt")
-        try createFile(at: folder, name: "d.JPEG") // upper‑case extension
+        try createFile(at: folder, name: "d.JPEG")
         try createFile(at: folder, name: "e.webp")
-        try createFile(at: folder, name: "f.gif") // not in allowed set
+        try createFile(at: folder, name: "f.gif")
 
         let result = ImageDiscoveryService.collectImageURLs(from: [folder.path])
-        // Expected image URLs (sorted by path) - resolve symlinks to compare properly
         let expected = ["a.png", "b.jpg", "d.JPEG", "e.webp"].map { folder.appendingPathComponent($0) }
         XCTAssertEqual(result.map { $0.standardizedFileURL }, expected.map { $0.standardizedFileURL }, "ImageDiscoveryService should return only supported image files")
     }

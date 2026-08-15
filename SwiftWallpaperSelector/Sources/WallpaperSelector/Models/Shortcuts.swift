@@ -1,6 +1,5 @@
 import Foundation
 
-/// User-configurable global keyboard shortcuts.
 public struct Shortcuts: Codable, Equatable {
     public var showMain: String?
     public var showPreview: String?
