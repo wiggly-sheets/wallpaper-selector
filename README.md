@@ -1,5 +1,7 @@
 <div align="center">
 
+  <img src="README-assets/app-icon.png" width="160" alt="Wallpaper Selector app icon" />
+
   <h1>Wallpaper Selector</h1>
 
   <p><b>Your wallpapers. Fast, native, and out of the way.</b></p>
