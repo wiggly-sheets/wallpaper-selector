@@ -1,6 +1,6 @@
 import Foundation
 
-public struct WallpaperSettings: Codable, Equatable {
+public struct WallpaperSettings: Codable, Equatable, Sendable {
     public var folderPaths: [String]
     public var currentWallpaper: String?
     public var intervalMinutes: RotationInterval
@@ -112,5 +112,77 @@ public struct WallpaperSettings: Codable, Equatable {
         try values.encodeIfPresent(appearanceDarkThemeID, forKey: .appearanceDarkThemeId)
         try values.encode(historyLimit, forKey: .historyLimit)
         try values.encode(wallpaperHistory, forKey: .wallpaperHistory)
+    }
+}
+
+extension WallpaperSettings {
+    func normalized() -> WallpaperSettings {
+        var normalized = self
+
+        func orderedUnique(_ values: [String]) -> [String] {
+            var seen = Set<String>()
+            return values.filter { seen.insert($0).inserted }
+        }
+
+        normalized.folderPaths = orderedUnique(folderPaths)
+        let configuredFolders = Set(normalized.folderPaths)
+
+        var seenThemeIDs = Set<String>()
+        normalized.themes = themes.compactMap { theme in
+            guard seenThemeIDs.insert(theme.id).inserted else { return nil }
+            var theme = theme
+            theme.folderPaths = orderedUnique(theme.folderPaths.filter { configuredFolders.contains($0) })
+            theme.lightWallpaper = validWallpaper(theme.lightWallpaper, in: theme.folderPaths)
+            theme.darkWallpaper = validWallpaper(theme.darkWallpaper, in: theme.folderPaths)
+            return theme
+        }
+
+        let themeIDs = Set(normalized.themes.map(\.id))
+        if let activeThemeID, !themeIDs.contains(activeThemeID) {
+            normalized.activeThemeID = nil
+        }
+        if let appearanceLightThemeID, !themeIDs.contains(appearanceLightThemeID) {
+            normalized.appearanceLightThemeID = nil
+        }
+        if let appearanceDarkThemeID, !themeIDs.contains(appearanceDarkThemeID) {
+            normalized.appearanceDarkThemeID = nil
+        }
+
+        normalized.allFoldersLightWallpaper = validWallpaper(
+            allFoldersLightWallpaper,
+            in: normalized.folderPaths
+        )
+        normalized.allFoldersDarkWallpaper = validWallpaper(
+            allFoldersDarkWallpaper,
+            in: normalized.folderPaths
+        )
+
+        if normalized.shortcuts.showPreview == normalized.shortcuts.showMain,
+           normalized.shortcuts.showPreview != nil {
+            normalized.shortcuts.showPreview = nil
+        }
+        if let menuShortcut = normalized.shortcuts.showMenu,
+           menuShortcut == normalized.shortcuts.showMain || menuShortcut == normalized.shortcuts.showPreview {
+            normalized.shortcuts.showMenu = nil
+        }
+
+        if ![5, 10, 20].contains(normalized.historyLimit) {
+            normalized.historyLimit = 10
+        }
+        normalized.wallpaperHistory = Array(
+            orderedUnique(wallpaperHistory).prefix(normalized.historyLimit)
+        )
+        return normalized
+    }
+
+    private func validWallpaper(_ wallpaper: String?, in folders: [String]) -> String? {
+        guard let wallpaper else { return nil }
+        let parent = URL(fileURLWithPath: wallpaper)
+            .deletingLastPathComponent()
+            .standardizedFileURL.path
+        let belongsToScope = folders.contains { folder in
+            URL(fileURLWithPath: folder).standardizedFileURL.path == parent
+        }
+        return belongsToScope ? wallpaper : nil
     }
 }

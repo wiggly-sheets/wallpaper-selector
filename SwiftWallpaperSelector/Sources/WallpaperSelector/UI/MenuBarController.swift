@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 
+@MainActor
 final class MenuBarController: NSObject {
 
     private(set) var statusItem: NSStatusItem?
@@ -11,17 +12,6 @@ final class MenuBarController: NSObject {
     var onShowPreview: (() -> Void)?
 
     var onOpenSettings: (() -> Void)?
-
-    var onShuffle: (() -> Void)?
-
-    var onNext: (() -> Void)?
-
-    var onPrevious: (() -> Void)?
-
-    var onToggleAllSpaces: ((Bool) -> Void)?
-
-    var onToggleMatchSystemAppearance: ((Bool) -> Void)?
-
 
     private let viewModel: MenuBarViewModel
     private var cancellables = Set<AnyCancellable>()
@@ -66,9 +56,9 @@ final class MenuBarController: NSObject {
 
         menu.addItem(NSMenuItem.separator())
 
-        menu.addItem(NSMenuItem(title: "Shuffle", action: #selector(shuffle(_:)), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Next Wallpaper", action: #selector(next(_:)), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Previous Wallpaper", action: #selector(previous(_:)), keyEquivalent: ""))
+        menu.addItem(actionItem(title: "Shuffle", action: #selector(shuffle(_:))))
+        menu.addItem(actionItem(title: "Next Wallpaper", action: #selector(next(_:))))
+        menu.addItem(actionItem(title: "Previous Wallpaper", action: #selector(previous(_:))))
 
         menu.addItem(NSMenuItem.separator())
 
@@ -125,6 +115,7 @@ final class MenuBarController: NSObject {
         menu.addItem(NSMenuItem.separator())
 
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: "")
+        settingsItem.target = self
         settingsItem.image = symbol("gearshape")
         menu.addItem(settingsItem)
 
@@ -135,6 +126,11 @@ final class MenuBarController: NSObject {
         menu.addItem(quitItem)
 
         statusItem.menu = menu
+    }
+
+    func showMenu() {
+        rebuildMenu()
+        statusItem?.button?.performClick(nil)
     }
 
     private func buildRotateSubmenu() -> NSMenu? {
@@ -214,6 +210,12 @@ final class MenuBarController: NSObject {
         return base.withSymbolConfiguration(config)
     }
 
+    private func actionItem(title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
 
     private func createStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -274,11 +276,11 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func toggleAllSpaces(_ sender: Any?) {
-        onToggleAllSpaces?(!viewModel.allSpaces)
+        viewModel.setAllSpaces(!viewModel.allSpaces)
     }
 
     @objc private func toggleMatchAppearance(_ sender: Any?) {
-        onToggleMatchSystemAppearance?(!viewModel.matchSystemAppearance)
+        viewModel.setMatchSystemAppearance(!viewModel.matchSystemAppearance)
     }
 
     @objc private func selectRecentWallpaper(_ sender: NSMenuItem?) {

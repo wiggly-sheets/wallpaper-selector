@@ -37,9 +37,6 @@ struct PickerWindow: View {
                 .controlSize(.small)
                 .onChange(of: settingsViewModel.allSpaces) { newValue in
                     settingsViewModel.setAllSpaces(newValue)
-                    if newValue {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!)
-                    }
                 }
 
                 HStack(spacing: 4) {
@@ -188,13 +185,14 @@ struct PickerWindow: View {
         .sheet(isPresented: $showingThemesDialog) {
             ThemesDialog()
                 .environmentObject(settingsViewModel)
+                .environmentObject(appState)
                 .frame(width: 440, height: 400)
         }
     }
 
 
     private var folderTitle: String {
-        let folders = settingsViewModel.folderPaths
+        let folders = appState.effectiveFolders
         if folders.isEmpty {
             return "Wallpaper Selector"
         } else if folders.count == 1 {
@@ -269,22 +267,15 @@ struct WallpaperThumbnail: View {
                     .frame(width: 100, height: 100)
             }
         }
-        .onAppear {
-            loadImage()
-        }
-    }
-
-    private func loadImage() {
-        isLoading = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            var image: NSImage?
-            if let data = try? Data(contentsOf: imageURL) {
-                image = NSImage(data: data)
-            }
-            DispatchQueue.main.async {
-                self.nsImage = image
-                self.isLoading = false
-            }
+        .task(id: imageURL) {
+            isLoading = true
+            let thumbnail = await WallpaperThumbnailRepository.shared.thumbnail(
+                for: imageURL,
+                maximumPixelSize: 240
+            )
+            guard !Task.isCancelled else { return }
+            nsImage = thumbnail.map { NSImage(cgImage: $0.image, size: .zero) }
+            isLoading = false
         }
     }
 }
@@ -392,9 +383,6 @@ struct AppearanceDialog: View {
             .toggleStyle(.switch)
             .onChange(of: settingsViewModel.matchSystemAppearance) { newValue in
                 settingsViewModel.setMatchSystemAppearance(newValue)
-                if newValue {
-                    appState.applyAppearanceWallpaperIfNeeded()
-                }
             }
 
             VStack(alignment: .leading, spacing: 12) {
@@ -424,7 +412,7 @@ struct AppearanceDialog: View {
 
                     Divider()
 
-                    Text("Optionally pin an exact image within the current theme below.")
+                    Text("Optionally pin an exact image for \(themeName).")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
 
@@ -432,6 +420,8 @@ struct AppearanceDialog: View {
                         Text("Light Wallpaper")
                         Spacer()
                         Menu {
+                            Button("None") { lightWallpaper = nil }
+                            Divider()
                             ForEach(appState.currentThemeImages, id: \.self) { url in
                                 Button(action: { lightWallpaper = url.path }) {
                                     Text(url.lastPathComponent)
@@ -447,6 +437,8 @@ struct AppearanceDialog: View {
                         Text("Dark Wallpaper")
                         Spacer()
                         Menu {
+                            Button("None") { darkWallpaper = nil }
+                            Divider()
                             ForEach(appState.currentThemeImages, id: \.self) { url in
                                 Button(action: { darkWallpaper = url.path }) {
                                     Text(url.lastPathComponent)
@@ -461,13 +453,13 @@ struct AppearanceDialog: View {
             .padding(.horizontal)
 
             Button(action: {
-                settingsViewModel.setAppearanceOverrides(
+                settingsViewModel.setAppearanceConfiguration(
                     lightThemeID: lightThemeID,
                     darkThemeID: darkThemeID,
                     lightWallpaper: lightWallpaper,
-                    darkWallpaper: darkWallpaper
+                    darkWallpaper: darkWallpaper,
+                    forThemeID: settingsViewModel.activeThemeID
                 )
-                appState.applyAppearanceWallpaperIfNeeded()
                 dismiss()
             }) {
                 Text("OK")
@@ -480,8 +472,14 @@ struct AppearanceDialog: View {
         .onAppear {
             lightThemeID = settingsViewModel.appearanceLightThemeID
             darkThemeID = settingsViewModel.appearanceDarkThemeID
-            lightWallpaper = settingsViewModel.allFoldersLightWallpaper
-            darkWallpaper = settingsViewModel.allFoldersDarkWallpaper
+            if let activeThemeID = settingsViewModel.activeThemeID,
+               let theme = settingsViewModel.themes.first(where: { $0.id == activeThemeID }) {
+                lightWallpaper = theme.lightWallpaper
+                darkWallpaper = theme.darkWallpaper
+            } else {
+                lightWallpaper = settingsViewModel.allFoldersLightWallpaper
+                darkWallpaper = settingsViewModel.allFoldersDarkWallpaper
+            }
         }
     }
 }
@@ -557,8 +555,7 @@ struct FoldersDialog: View {
                 EditFolderView(
                     folderPath: folderToEdit,
                     onUpdate: { newPath in
-                        settingsViewModel.removeFolder(folderToEdit)
-                        settingsViewModel.addFolder(newPath)
+                        settingsViewModel.replaceFolder(oldPath: folderToEdit, with: newPath)
                     }
                 )
             }
@@ -568,6 +565,7 @@ struct FoldersDialog: View {
 
 struct ThemesDialog: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var showingAddTheme = false
     @State private var selectedThemeID: String?
@@ -660,7 +658,7 @@ struct ThemesDialog: View {
             .listStyle(.sidebar)
 
             Button(action: {
-                settingsViewModel.setActiveTheme(selectedThemeID)
+                appState.setActiveTheme(selectedThemeID)
                 dismiss()
             }) {
                 Text("Apply")
@@ -671,20 +669,17 @@ struct ThemesDialog: View {
         }
         .frame(width: 440, height: 400)
         .sheet(isPresented: $showingAddTheme) {
-            AddThemeView { theme in
+            AddThemeView(availableFolders: settingsViewModel.folderPaths) { theme in
                 settingsViewModel.addTheme(theme)
             }
         }
         .sheet(isPresented: $showingEditTheme, onDismiss: { themeToEdit = nil }) {
             if let theme = themeToEdit {
-                EditThemeView(theme: theme) { updated in
-                    settingsViewModel.editTheme(
-                        id: theme.id,
-                        name: updated.name,
-                        folderPaths: updated.folderPaths,
-                        lightWallpaper: updated.lightWallpaper,
-                        darkWallpaper: updated.darkWallpaper
-                    )
+                EditThemeView(
+                    theme: theme,
+                    availableFolders: settingsViewModel.folderPaths
+                ) { updated in
+                    settingsViewModel.replaceTheme(id: theme.id, with: updated)
                 }
             }
         }

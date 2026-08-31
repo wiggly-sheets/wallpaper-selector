@@ -1,7 +1,8 @@
 APP_NAME := Wallpaper Selector
 PRODUCT_NAME := WallpaperSelector
 CONFIGURATION ?= debug
-VERSION ?= 0.1.0
+VERSION ?= 1.0.0
+BUILD_NUMBER ?= 1
 DIST_DIR := dist
 APP_BUNDLE := $(DIST_DIR)/$(APP_NAME).app
 INSTALL_DIR ?= $(HOME)/Applications
@@ -38,6 +39,8 @@ bundle: build
 	mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources"
 	cp "$(shell swift build -c $(CONFIGURATION) --show-bin-path)/$(PRODUCT_NAME)" "$(APP_BUNDLE)/Contents/MacOS/$(PRODUCT_NAME)"
 	cp Support/Info.plist "$(APP_BUNDLE)/Contents/Info.plist"
+	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(VERSION)" "$(APP_BUNDLE)/Contents/Info.plist"
+	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(BUILD_NUMBER)" "$(APP_BUNDLE)/Contents/Info.plist"
 	cp SwiftWallpaperSelector/Sources/WallpaperSelector/Resources/AppIcon.icns "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
 	cp -R "$(shell swift build -c $(CONFIGURATION) --show-bin-path)"/$(PRODUCT_NAME)_*.bundle "$(APP_BUNDLE)/Contents/Resources/"
 	codesign --force --sign - "$(APP_BUNDLE)"

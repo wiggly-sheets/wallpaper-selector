@@ -1,38 +1,29 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 struct MenuBarHost: NSViewControllerRepresentable {
     let appState: AppState
-    let rotationService: RotationService
     let settingsViewModel: SettingsViewModel
 
     func makeNSViewController(context: Context) -> MenuBarHostingViewController {
-        MenuBarHostingViewController(appState: appState, rotationService: rotationService, settingsViewModel: settingsViewModel)
+        MenuBarHostingViewController(appState: appState, settingsViewModel: settingsViewModel)
     }
 
-    func updateNSViewController(_ nsViewController: MenuBarHostingViewController, context: Context) {
-        nsViewController.appState = appState
-        nsViewController.rotationService = rotationService
-        nsViewController.settingsViewModel = settingsViewModel
-    }
+    func updateNSViewController(_ controller: MenuBarHostingViewController, context: Context) {}
 }
 
+@MainActor
 final class MenuBarHostingViewController: NSViewController {
-    var appState: AppState
-    var rotationService: RotationService
-    var settingsViewModel: SettingsViewModel
-
+    private let appState: AppState
+    private let settingsViewModel: SettingsViewModel
     private var menuBarController: MenuBarController?
-    private var hotKeyManager: HotKeyManager?
-    private var launchAtLoginManager: LaunchAtLoginManager?
-    private var appearanceMonitor: AppearanceMonitor?
     private var popoverController: TrayPopoverWindowController?
-    private var settingsWindowController: NSWindowController?
+    private var fallbackSettingsWindowController: NSWindowController?
     private var pickerWindowController: NSWindowController?
 
-    init(appState: AppState, rotationService: RotationService, settingsViewModel: SettingsViewModel) {
+    init(appState: AppState, settingsViewModel: SettingsViewModel) {
         self.appState = appState
-        self.rotationService = rotationService
         self.settingsViewModel = settingsViewModel
         super.init(nibName: nil, bundle: nil)
     }
@@ -45,65 +36,13 @@ final class MenuBarHostingViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let provider = WallpaperProvider()
-        let themeProvider = ThemeProvider(settingsManager: appState.settingsManager)
-        self.appearanceMonitor = AppearanceMonitor(
-            settingsManager: appState.settingsManager,
-            wallpaperProvider: provider,
-            themeProvider: themeProvider
-        )
-
-        let viewModel = MenuBarViewModel(
-            appState: appState,
-            rotationService: rotationService,
-            themeProvider: themeProvider
-        )
-        let controller = MenuBarController(viewModel: viewModel)
-
+        let controller = MenuBarController(viewModel: MenuBarViewModel(appState: appState))
         controller.onShowMainWindow = { [weak self] in self?.showMainWindow() }
         controller.onShowPreview = { [weak self] in self?.showPopover() }
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
-        controller.onShuffle = { [weak self] in self?.rotationService.tick() }
-        controller.onNext = { [weak self] in
-            self?.appState.updateSettings { $0.rotationAction = .next }
-            self?.rotationService.tick()
-        }
-        controller.onPrevious = { [weak self] in
-            self?.appState.updateSettings { $0.rotationAction = .previous }
-            self?.rotationService.tick()
-        }
-        controller.onToggleAllSpaces = { [weak self] enabled in
-            self?.appState.updateSettings { $0.allSpaces = enabled }
-        }
-        controller.onToggleMatchSystemAppearance = { [weak self] enabled in
-            self?.appState.updateSettings { $0.matchSystemAppearance = enabled }
-            self?.rotationService.updateSettings()
-            if enabled {
-                self?.appearanceMonitor?.applyAppearanceWallpaperIfNeeded()
-            }
-        }
-
-        self.menuBarController = controller
+        menuBarController = controller
         controller.rebuildMenu()
 
-        let hotKeyManager = HotKeyManager(settingsManager: appState.settingsManager)
-        hotKeyManager.onHotKeyPressed = { [weak self] identifier in
-            self?.handleHotKey(identifier)
-        }
-        hotKeyManager.register()
-        self.hotKeyManager = hotKeyManager
-
-        let loginManager = LaunchAtLoginManager()
-        self.launchAtLoginManager = loginManager
-
-        appearanceMonitor?.applyAppearanceWallpaperIfNeeded()
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleShuffleRequested),
-            name: .ShuffleRequested,
-            object: nil
-        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleOpenSettingsWindow),
@@ -114,18 +53,6 @@ final class MenuBarHostingViewController: NSViewController {
             self,
             selector: #selector(handleOpenMainWindow),
             name: .OpenMainWindowRequested,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleNextRequested),
-            name: .NextRequested,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handlePreviousRequested),
-            name: .PreviousRequested,
             object: nil
         )
         NotificationCenter.default.addObserver(
@@ -150,11 +77,38 @@ final class MenuBarHostingViewController: NSViewController {
         NotificationCenter.default.removeObserver(self)
     }
 
+    func handleHotKey(_ identifier: String) {
+        switch identifier {
+        case "showMain":
+            showMainWindow()
+        case "showPreview":
+            showPopover()
+        case "showMenu":
+            menuBarController?.showMenu()
+        default:
+            break
+        }
+    }
+
+    func showAllSpacesManualFallback(
+        enabled: Bool,
+        reason: AllSpacesManualFallbackReason
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Finish All Spaces Setup in System Settings"
+        alert.informativeText = allSpacesFallbackMessage(enabled: enabled, reason: reason)
+        alert.addButton(withTitle: "OK")
+
+        if let window = pickerWindowController?.window, window.isVisible {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
 
     private func showMainWindow() {
-        if let existingWindow = NSApp.windows.first(where: { $0.title == "Wallpaper Selector" }) {
-            existingWindow.makeKeyAndOrderFront(nil)
-        } else {
+        if pickerWindowController == nil {
             let rootView = PickerWindow()
                 .environmentObject(settingsViewModel)
                 .environmentObject(appState)
@@ -170,8 +124,10 @@ final class MenuBarHostingViewController: NSViewController {
             window.isReleasedWhenClosed = false
             window.center()
             pickerWindowController = NSWindowController(window: window)
-            pickerWindowController?.showWindow(nil)
         }
+
+        pickerWindowController?.showWindow(nil)
+        pickerWindowController?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -179,19 +135,27 @@ final class MenuBarHostingViewController: NSViewController {
         if popoverController == nil {
             popoverController = TrayPopoverWindowController(
                 statusItem: menuBarController?.statusItem,
-                settingsManager: appState.settingsManager,
-                wallpaperProvider: WallpaperProvider(),
-                themeProvider: ThemeProvider(settingsManager: appState.settingsManager),
-                rotationService: rotationService
+                appState: appState
             )
         }
         popoverController?.showWindow(nil)
     }
 
     private func openSettings() {
-        if settingsWindowController == nil {
+        let openedSwiftUISettings = NSApp.sendAction(
+            Selector(("showSettingsWindow:")),
+            to: nil,
+            from: nil
+        )
+        if !openedSwiftUISettings {
+            showFallbackSettingsWindow()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showFallbackSettingsWindow() {
+        if fallbackSettingsWindowController == nil {
             let rootView = SettingsView().environmentObject(settingsViewModel)
-            let hostingController = NSHostingController(rootView: rootView)
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 760, height: 700),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -201,41 +165,33 @@ final class MenuBarHostingViewController: NSViewController {
             window.title = "Settings"
             window.minSize = NSSize(width: 760, height: 560)
             window.contentMinSize = window.minSize
-            window.contentViewController = hostingController
+            window.contentViewController = NSHostingController(rootView: rootView)
             window.isReleasedWhenClosed = false
             window.center()
-            settingsWindowController = NSWindowController(window: window)
+            fallbackSettingsWindowController = NSWindowController(window: window)
         }
-        settingsWindowController?.showWindow(nil)
-        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        fallbackSettingsWindowController?.showWindow(nil)
+        fallbackSettingsWindowController?.window?.makeKeyAndOrderFront(nil)
     }
 
-    private func handleHotKey(_ identifier: String) {
-        switch identifier {
-        case "showMain":
-            showMainWindow()
-        case "showPreview":
-            showPopover()
-        case "showMenu":
-            menuBarController?.rebuildMenu()
-        default:
-            break
+    private func allSpacesFallbackMessage(
+        enabled: Bool,
+        reason: AllSpacesManualFallbackReason
+    ) -> String {
+        let desiredAction = enabled ? "turn on" : "turn off"
+        let guidance = "Please \(desiredAction) ‘Show on all Spaces’ in Wallpaper settings."
+        switch reason {
+        case .accessibilityPermissionRequired:
+            return "Wallpaper Selector needs Accessibility permission to change this setting automatically. \(guidance)"
+        case .couldNotOpenWallpaperSettings:
+            return "Wallpaper settings could not be opened. \(guidance)"
+        case .systemSettingsUnavailable:
+            return "System Settings did not finish opening. \(guidance)"
+        case .showOnAllSpacesControlNotFound:
+            return "The ‘Show on all Spaces’ control could not be found safely. \(guidance)"
+        case .automationFailed(let detail):
+            return "The setting could not be changed automatically (\(detail)). \(guidance)"
         }
-    }
-
-    @objc private func handleShuffleRequested() {
-        rotationService.tick()
-    }
-
-    @objc private func handleNextRequested() {
-        appState.updateSettings { $0.rotationAction = .next }
-        rotationService.tick()
-    }
-
-    @objc private func handlePreviousRequested() {
-        appState.updateSettings { $0.rotationAction = .previous }
-        rotationService.tick()
     }
 
     @objc private func handleMenuBarOpenSettings() {
@@ -251,8 +207,7 @@ final class MenuBarHostingViewController: NSViewController {
     }
 
     @objc private func handleApplyRecentWallpaper(_ notification: Notification) {
-        if let path = notification.object as? String {
-            appState.setWallpaper(path)
-        }
+        guard let path = notification.object as? String else { return }
+        appState.setWallpaper(path)
     }
 }

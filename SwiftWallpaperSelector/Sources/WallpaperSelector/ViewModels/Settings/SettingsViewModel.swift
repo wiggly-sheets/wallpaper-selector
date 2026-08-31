@@ -17,6 +17,7 @@ enum ThemeSource: String, CaseIterable {
     }
 }
 
+@MainActor
 final class SettingsViewModel: ObservableObject {
 
     @Published var folderPaths: [String] = []
@@ -54,20 +55,34 @@ final class SettingsViewModel: ObservableObject {
 
     @Published var settingsFolderPath: String? = nil
 
+    @Published private(set) var settingsErrorMessage: String? = nil
+
+    @Published private(set) var currentThemeImages: [URL] = []
+
 
     private let appState: AppState
-    private let themeProvider: ThemeProvider
     private let launchAtLoginManager: LaunchAtLoginManager
 
 
-    init(appState: AppState, launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()) {
+    init(appState: AppState, launchAtLoginManager: LaunchAtLoginManager? = nil) {
         self.appState = appState
-        self.themeProvider = ThemeProvider(settingsManager: appState.settingsManager)
-        self.launchAtLoginManager = launchAtLoginManager
+        self.launchAtLoginManager = launchAtLoginManager ?? LaunchAtLoginManager()
         syncFromAppState()
 
         appState.$settings
             .sink { [weak self] _ in self?.syncFromAppState() }
+            .store(in: &cancellables)
+
+        appState.settingsManager.$lastError
+            .sink { [weak self] error in
+                self?.settingsErrorMessage = error?.localizedDescription
+            }
+            .store(in: &cancellables)
+
+        appState.$currentThemeImages
+            .sink { [weak self] images in
+                self?.currentThemeImages = images
+            }
             .store(in: &cancellables)
     }
 
@@ -75,11 +90,6 @@ final class SettingsViewModel: ObservableObject {
     var hasFolders: Bool {
         !folderPaths.isEmpty
     }
-
-    var currentThemeImages: [URL] {
-        ImageDiscoveryService.collectImageURLs(from: themeProvider.effectiveFolders())
-    }
-
 
     func save() {
         appState.updateSettings { _ in }
@@ -100,25 +110,39 @@ final class SettingsViewModel: ObservableObject {
         appState.updateSettings { settings in
             var newSettings = settings
             newSettings.folderPaths.removeAll { $0 == path }
+            for index in newSettings.themes.indices {
+                newSettings.themes[index].folderPaths.removeAll { $0 == path }
+            }
+            settings = newSettings
+        }
+        syncFromAppState()
+    }
+
+    func replaceFolder(oldPath: String, with newPath: String) {
+        appState.updateSettings { settings in
+            guard let index = settings.folderPaths.firstIndex(of: oldPath) else { return }
+            guard oldPath == newPath || !settings.folderPaths.contains(newPath) else { return }
+
+            var newSettings = settings
+            newSettings.folderPaths[index] = newPath
+            for themeIndex in newSettings.themes.indices {
+                newSettings.themes[themeIndex].folderPaths = newSettings.themes[themeIndex].folderPaths
+                    .map { $0 == oldPath ? newPath : $0 }
+                    .removingDuplicates()
+            }
             settings = newSettings
         }
         syncFromAppState()
     }
 
     func editFolder(id: String, newPath: String) {
-        appState.updateSettings { settings in
-            if let index = settings.folderPaths.firstIndex(of: id) {
-                var newSettings = settings
-                newSettings.folderPaths[index] = newPath
-                settings = newSettings
-            }
-        }
-        syncFromAppState()
+        replaceFolder(oldPath: id, with: newPath)
     }
 
 
     func addTheme(_ theme: Theme) {
         appState.updateSettings { settings in
+            guard !settings.themes.contains(where: { $0.id == theme.id }) else { return }
             var newSettings = settings
             newSettings.themes.append(theme)
             settings = newSettings
@@ -138,10 +162,33 @@ final class SettingsViewModel: ObservableObject {
         syncFromAppState()
     }
 
+    func replaceTheme(id: String, with replacement: Theme) {
+        appState.updateSettings { settings in
+            guard let index = settings.themes.firstIndex(where: { $0.id == id }) else { return }
+            settings.themes[index] = Theme(
+                id: id,
+                name: replacement.name,
+                folderPaths: replacement.folderPaths,
+                lightWallpaper: replacement.lightWallpaper,
+                darkWallpaper: replacement.darkWallpaper
+            )
+        }
+        syncFromAppState()
+    }
+
     func removeTheme(id: String) {
         appState.updateSettings { settings in
             var newSettings = settings
             newSettings.themes.removeAll { $0.id == id }
+            if newSettings.activeThemeID == id {
+                newSettings.activeThemeID = nil
+            }
+            if newSettings.appearanceLightThemeID == id {
+                newSettings.appearanceLightThemeID = nil
+            }
+            if newSettings.appearanceDarkThemeID == id {
+                newSettings.appearanceDarkThemeID = nil
+            }
             settings = newSettings
         }
         syncFromAppState()
@@ -217,18 +264,30 @@ final class SettingsViewModel: ObservableObject {
 
     func setShowMainShortcut(_ shortcut: String?) {
         var newShortcuts = shortcuts
+        if let shortcut {
+            if newShortcuts.showPreview == shortcut { newShortcuts.showPreview = nil }
+            if newShortcuts.showMenu == shortcut { newShortcuts.showMenu = nil }
+        }
         newShortcuts.showMain = shortcut
         setShortcuts(newShortcuts)
     }
 
     func setShowPreviewShortcut(_ shortcut: String?) {
         var newShortcuts = shortcuts
+        if let shortcut {
+            if newShortcuts.showMain == shortcut { newShortcuts.showMain = nil }
+            if newShortcuts.showMenu == shortcut { newShortcuts.showMenu = nil }
+        }
         newShortcuts.showPreview = shortcut
         setShortcuts(newShortcuts)
     }
 
     func setShowMenuShortcut(_ shortcut: String?) {
         var newShortcuts = shortcuts
+        if let shortcut {
+            if newShortcuts.showMain == shortcut { newShortcuts.showMain = nil }
+            if newShortcuts.showPreview == shortcut { newShortcuts.showPreview = nil }
+        }
         newShortcuts.showMenu = shortcut
         setShortcuts(newShortcuts)
     }
@@ -236,7 +295,9 @@ final class SettingsViewModel: ObservableObject {
 
     func setActiveTheme(_ themeID: String?) {
         appState.updateSettings { settings in
-            settings.activeThemeID = themeID
+            settings.activeThemeID = themeID.flatMap { candidate in
+                settings.themes.contains(where: { $0.id == candidate }) ? candidate : nil
+            }
         }
         syncFromAppState()
     }
@@ -248,10 +309,72 @@ final class SettingsViewModel: ObservableObject {
         darkWallpaper: String?
     ) {
         appState.updateSettings { settings in
-            settings.appearanceLightThemeID = lightThemeID
-            settings.appearanceDarkThemeID = darkThemeID
+            let themeIDs = Set(settings.themes.map(\.id))
+            settings.appearanceLightThemeID = lightThemeID.flatMap { themeIDs.contains($0) ? $0 : nil }
+            settings.appearanceDarkThemeID = darkThemeID.flatMap { themeIDs.contains($0) ? $0 : nil }
             settings.allFoldersLightWallpaper = lightWallpaper
             settings.allFoldersDarkWallpaper = darkWallpaper
+        }
+        syncFromAppState()
+    }
+
+    func setAppearanceThemeIDs(light: String?, dark: String?) {
+        appState.updateSettings { settings in
+            let themeIDs = Set(settings.themes.map(\.id))
+            settings.appearanceLightThemeID = light.flatMap { themeIDs.contains($0) ? $0 : nil }
+            settings.appearanceDarkThemeID = dark.flatMap { themeIDs.contains($0) ? $0 : nil }
+        }
+        syncFromAppState()
+    }
+
+    func setAppearanceWallpapers(light: String?, dark: String?, forThemeID themeID: String?) {
+        appState.updateSettings { settings in
+            if let themeID {
+                guard let index = settings.themes.firstIndex(where: { $0.id == themeID }) else { return }
+                let theme = settings.themes[index]
+                settings.themes[index] = Theme(
+                    id: theme.id,
+                    name: theme.name,
+                    folderPaths: theme.folderPaths,
+                    lightWallpaper: light,
+                    darkWallpaper: dark
+                )
+            } else {
+                settings.allFoldersLightWallpaper = light
+                settings.allFoldersDarkWallpaper = dark
+            }
+        }
+        syncFromAppState()
+    }
+
+    func setAppearanceConfiguration(
+        lightThemeID: String?,
+        darkThemeID: String?,
+        lightWallpaper: String?,
+        darkWallpaper: String?,
+        forThemeID themeID: String?
+    ) {
+        appState.updateSettings { settings in
+            var newSettings = settings
+            let themeIDs = Set(newSettings.themes.map(\.id))
+            newSettings.appearanceLightThemeID = lightThemeID.flatMap { themeIDs.contains($0) ? $0 : nil }
+            newSettings.appearanceDarkThemeID = darkThemeID.flatMap { themeIDs.contains($0) ? $0 : nil }
+
+            if let themeID {
+                guard let index = newSettings.themes.firstIndex(where: { $0.id == themeID }) else { return }
+                let theme = newSettings.themes[index]
+                newSettings.themes[index] = Theme(
+                    id: theme.id,
+                    name: theme.name,
+                    folderPaths: theme.folderPaths,
+                    lightWallpaper: lightWallpaper,
+                    darkWallpaper: darkWallpaper
+                )
+            } else {
+                newSettings.allFoldersLightWallpaper = lightWallpaper
+                newSettings.allFoldersDarkWallpaper = darkWallpaper
+            }
+            settings = newSettings
         }
         syncFromAppState()
     }
@@ -275,8 +398,9 @@ final class SettingsViewModel: ObservableObject {
         do {
             try appState.settingsManager.relocateSettings(to: url)
             settingsFolderPath = url.path
+            settingsErrorMessage = nil
         } catch {
-            print("[SettingsViewModel] Failed to move settings: \(error)")
+            settingsErrorMessage = error.localizedDescription
         }
     }
 
@@ -284,8 +408,9 @@ final class SettingsViewModel: ObservableObject {
         do {
             try appState.settingsManager.useDefaultSettingsLocation()
             settingsFolderPath = nil
+            settingsErrorMessage = nil
         } catch {
-            print("[SettingsViewModel] Failed to restore default settings location: \(error)")
+            settingsErrorMessage = error.localizedDescription
         }
     }
 
@@ -294,7 +419,9 @@ final class SettingsViewModel: ObservableObject {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
-        launchAtLoginManager.isEnabled = enabled
+        if case .failure(let error) = launchAtLoginManager.setEnabled(enabled) {
+            settingsErrorMessage = "Could not update Launch at Login: \(error.localizedDescription)"
+        }
         launchAtLogin = launchAtLoginManager.isEnabled
     }
 
@@ -344,8 +471,16 @@ final class SettingsViewModel: ObservableObject {
         launchAtLogin = launchAtLoginManager.isEnabled
 
         themeSource = currentThemeSource
-        settingsFolderPath = appState.settingsManager.settingsDirectory.path == SettingsManager.defaultSettingsDirectory.path
+        settingsFolderPath = appState.settingsManager.isUsingDefaultSettingsDirectory
             ? nil
             : appState.settingsManager.settingsDirectory.path
+        currentThemeImages = appState.currentThemeImages
+    }
+}
+
+private extension Array where Element: Hashable {
+    func removingDuplicates() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }

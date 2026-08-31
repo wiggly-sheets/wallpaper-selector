@@ -1,6 +1,6 @@
 import Foundation
 
-public enum RotationInterval: Int, Codable, Equatable, CaseIterable {
+public enum RotationInterval: Int, Codable, Equatable, CaseIterable, Sendable {
     case off = 0
     case minutes30 = 30
     case hour1 = 60

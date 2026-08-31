@@ -1,34 +1,23 @@
 import Foundation
 import ServiceManagement
 
+@MainActor
 final class LaunchAtLoginManager {
-
     var isEnabled: Bool {
-        get {
-            if #available(macOS 13, *) {
-                return SMAppService.mainApp.status == .enabled
-            } else {
-                return false
-            }
-        }
-        set {
-            if #available(macOS 13, *) {
-                if newValue {
-                    try? SMAppService.mainApp.register()
-                } else {
-                    try? SMAppService.mainApp.unregister()
-                }
-            } else {
-                SMLoginItemSetEnabled(
-                    Bundle.main.bundleIdentifier! as CFString,
-                    newValue
-                )
-            }
-        }
+        SMAppService.mainApp.status == .enabled
     }
 
-
-    func setEnabled(_ enabled: Bool) {
-        self.isEnabled = enabled
+    @discardableResult
+    func setEnabled(_ enabled: Bool) -> Result<Void, Error> {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Theme: Codable, Equatable, Identifiable, Hashable {
+public struct Theme: Codable, Equatable, Identifiable, Hashable, Sendable {
     public let id: String
     public var name: String
     public var folderPaths: [String]

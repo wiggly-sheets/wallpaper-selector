@@ -2,12 +2,10 @@ import AppKit
 import SwiftUI
 
 extension Notification.Name {
-    static let ShuffleRequested = Notification.Name("ShuffleRequested")
-    static let NextRequested = Notification.Name("NextRequested")
-    static let PreviousRequested = Notification.Name("PreviousRequested")
     static let OpenMainWindowRequested = Notification.Name("OpenMainWindowRequested")
 }
 
+@MainActor
 final class TrayPopoverWindowController: NSWindowController {
     private var statusItem: NSStatusItem?
 
@@ -18,17 +16,9 @@ final class TrayPopoverWindowController: NSWindowController {
 
     convenience init(
         statusItem: NSStatusItem?,
-        settingsManager: SettingsManager,
-        wallpaperProvider: WallpaperSetting,
-        themeProvider: ThemeProvider,
-        rotationService: RotationService
+        appState: AppState
     ) {
-        let viewModel = TrayPopoverViewModel(
-            settingsManager: settingsManager,
-            wallpaperProvider: wallpaperProvider,
-            themeProvider: themeProvider,
-            rotationService: rotationService
-        )
+        let viewModel = TrayPopoverViewModel(appState: appState)
         let view = TrayPopoverView().environmentObject(viewModel)
         let hostingView = NSHostingView(rootView: view)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
@@ -76,8 +66,13 @@ final class TrayPopoverWindowController: NSWindowController {
         )
     }
 
-    deinit {
-        removeOutsideClickMonitors()
+    isolated deinit {
+        if let globalMouseMonitor {
+            NSEvent.removeMonitor(globalMouseMonitor)
+        }
+        if let localMouseMonitor {
+            NSEvent.removeMonitor(localMouseMonitor)
+        }
         NotificationCenter.default.removeObserver(self)
     }
 

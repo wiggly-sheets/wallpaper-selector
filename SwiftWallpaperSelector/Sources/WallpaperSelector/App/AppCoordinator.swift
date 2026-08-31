@@ -1,82 +1,79 @@
-import Foundation
-import Combine
-import SwiftUI
 import AppKit
+import Combine
+import Foundation
 
+@MainActor
 final class AppCoordinator: ObservableObject {
-
     let settingsManager: SettingsManager
     let wallpaperProvider: WallpaperProvider
     let themeProvider: ThemeProvider
     let rotationService: RotationService
     let appearanceMonitor: AppearanceMonitor
-    private(set) var hotKeyManager: HotKeyManager
+    let hotKeyManager: HotKeyManager
     let launchAtLoginManager: LaunchAtLoginManager
-    private let allSpacesService = AllSpacesService()
+    let appState: AppState
+    let settingsViewModel: SettingsViewModel
 
-
-    @Published var appState: AppState!
-    @Published var settingsViewModel: SettingsViewModel!
-
-
+    private let allSpacesService: AllSpacesService
     private var cancellables = Set<AnyCancellable>()
-    private var previousAppearanceSettings: WallpaperSettings?
+    private var previousSettings: WallpaperSettings
     private var menuBarHostingController: MenuBarHostingViewController?
 
-
     init() {
-        settingsManager = SettingsManager()
-
-        wallpaperProvider = WallpaperProvider()
-
-        let initialThemeProvider = ThemeProvider(settingsManager: settingsManager)
-        themeProvider = initialThemeProvider
-
-        rotationService = RotationService(
+        let settingsManager = SettingsManager()
+        let wallpaperProvider = WallpaperProvider()
+        let themeProvider = ThemeProvider(settingsManager: settingsManager)
+        let rotationService = RotationService(
             settingsManager: settingsManager,
             wallpaperProvider: wallpaperProvider,
-            themeProvider: initialThemeProvider
+            themeProvider: themeProvider
         )
-
-        appearanceMonitor = AppearanceMonitor(
+        let appearanceMonitor = AppearanceMonitor(
             settingsManager: settingsManager,
             wallpaperProvider: wallpaperProvider,
-            themeProvider: initialThemeProvider
+            themeProvider: themeProvider
+        )
+        let launchAtLoginManager = LaunchAtLoginManager()
+        let appState = AppState(
+            settingsManager: settingsManager,
+            rotationService: rotationService,
+            themeProvider: themeProvider
         )
 
+        self.settingsManager = settingsManager
+        self.wallpaperProvider = wallpaperProvider
+        self.themeProvider = themeProvider
+        self.rotationService = rotationService
+        self.appearanceMonitor = appearanceMonitor
         hotKeyManager = HotKeyManager(settingsManager: settingsManager)
-
-        launchAtLoginManager = LaunchAtLoginManager()
-
-        let state = AppState(
-            settingsManager: settingsManager,
-            themeProvider: initialThemeProvider,
-            wallpaperProvider: wallpaperProvider
+        self.launchAtLoginManager = launchAtLoginManager
+        self.appState = appState
+        settingsViewModel = SettingsViewModel(
+            appState: appState,
+            launchAtLoginManager: launchAtLoginManager
         )
-        appState = state
-        settingsViewModel = SettingsViewModel(appState: appState, launchAtLoginManager: launchAtLoginManager)
-        previousAppearanceSettings = appState.settings
+        allSpacesService = AllSpacesService()
+        previousSettings = settingsManager.settings
 
         appState.$settings
             .dropFirst()
-            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.handleSettingsChange() }
             .store(in: &cancellables)
 
         startMenuBar()
-
+        allSpacesService.onResult = { [weak self] result in
+            guard case let .manualActionRequired(enabled, reason) = result else { return }
+            self?.menuBarHostingController?.showAllSpacesManualFallback(
+                enabled: enabled,
+                reason: reason
+            )
+        }
+        hotKeyManager.onHotKeyPressed = { [weak self] identifier in
+            self?.menuBarHostingController?.handleHotKey(identifier)
+        }
+        hotKeyManager.register()
         rotationService.updateSettings()
-
         appearanceMonitor.applyAppearanceWallpaperIfNeeded()
-
-        appState.$settings
-            .map(\.currentWallpaper)
-            .removeDuplicates()
-            .dropFirst()
-            .sink { [weak self] _ in
-                self?.applyAllSpacesIfNeeded()
-            }
-            .store(in: &cancellables)
 
         NotificationCenter.default.addObserver(
             self,
@@ -90,39 +87,35 @@ final class AppCoordinator: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 
-
-    func updateHotKeys() {
-        self.hotKeyManager.register()
-    }
-
-
     private func handleSettingsChange() {
         let current = appState.settings
-        let previous = previousAppearanceSettings
-        previousAppearanceSettings = current
+        let previous = previousSettings
+        previousSettings = current
 
-        self.rotationService.updateSettings()
-        self.hotKeyManager.updateShortcuts()
-        self.appState.reloadDerivedState()
-        let appearanceContextChanged = previous?.matchSystemAppearance != current.matchSystemAppearance
-            || previous?.activeThemeID != current.activeThemeID
-            || previous?.appearanceLightThemeID != current.appearanceLightThemeID
-            || previous?.appearanceDarkThemeID != current.appearanceDarkThemeID
-            || previous?.allFoldersLightWallpaper != current.allFoldersLightWallpaper
-            || previous?.allFoldersDarkWallpaper != current.allFoldersDarkWallpaper
-            || previous?.themes != current.themes
-        if previous?.allSpaces != current.allSpaces {
+        rotationService.updateSettings()
+        if previous.shortcuts != current.shortcuts {
+            hotKeyManager.updateShortcuts()
+        }
+
+        if previous.allSpaces != current.allSpaces {
             allSpacesService.setEnabled(current.allSpaces)
         }
+
+        let appearanceContextChanged = previous.matchSystemAppearance != current.matchSystemAppearance
+            || previous.appearanceLightThemeID != current.appearanceLightThemeID
+            || previous.appearanceDarkThemeID != current.appearanceDarkThemeID
+            || previous.allFoldersLightWallpaper != current.allFoldersLightWallpaper
+            || previous.allFoldersDarkWallpaper != current.allFoldersDarkWallpaper
+            || previous.themes != current.themes
+
         if current.matchSystemAppearance && appearanceContextChanged {
-            self.appearanceMonitor.applyAppearanceWallpaperIfNeeded()
+            appearanceMonitor.applyAppearanceWallpaperIfNeeded()
         }
     }
 
     private func startMenuBar() {
         let controller = MenuBarHostingViewController(
             appState: appState,
-            rotationService: rotationService,
             settingsViewModel: settingsViewModel
         )
         menuBarHostingController = controller
@@ -130,11 +123,6 @@ final class AppCoordinator: ObservableObject {
     }
 
     @objc private func handleDidBecomeActive() {
-        self.appearanceMonitor.applyAppearanceWallpaperIfNeeded()
-    }
-
-    private func applyAllSpacesIfNeeded() {
-        guard appState.settings.allSpaces else { return }
-        allSpacesService.setEnabled(true)
+        appearanceMonitor.applyAppearanceWallpaperIfNeeded()
     }
 }

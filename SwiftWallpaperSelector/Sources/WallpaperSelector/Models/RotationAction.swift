@@ -1,6 +1,6 @@
 import Foundation
 
-public enum RotationAction: String, Codable, Equatable, CaseIterable {
+public enum RotationAction: String, Codable, Equatable, CaseIterable, Sendable {
     case shuffle = "shuffle"
     case next = "next"
     case previous = "previous"

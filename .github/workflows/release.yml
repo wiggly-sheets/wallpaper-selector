@@ -17,9 +17,10 @@ jobs:
       - name: Build release artifacts
         env:
           VERSION: ${{ github.ref_name }}
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
           VERSION="${VERSION#v}"
-          make release-artifacts CONFIGURATION=release VERSION="$VERSION" CREATE_DMG_FINALIZE_FLAGS=''
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:

@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 final class ThemeProvider {
 
     private let settingsManager: SettingsManager

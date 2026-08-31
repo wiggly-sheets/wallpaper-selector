@@ -86,8 +86,9 @@ open "/Applications/Wallpaper Selector.app"
 macOS has no public API for its **Show on all Spaces** wallpaper preference.
 When you enable All Spaces, Wallpaper Selector opens System Settings and asks
 for Accessibility permission. Grant it in **System Settings → Privacy &
-Security → Accessibility**; app then turns on macOS preference and closes
-System Settings.
+Security → Accessibility**; the app then updates the macOS preference. If the
+control cannot be changed safely, Wallpaper Selector leaves Wallpaper settings
+open and tells you how to finish the change manually.
 
 ## Build from source
 

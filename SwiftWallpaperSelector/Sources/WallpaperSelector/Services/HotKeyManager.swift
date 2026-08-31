@@ -1,6 +1,7 @@
 import Foundation
 import Carbon
 
+@MainActor
 final class HotKeyManager {
 
     private(set) var registeredHotKeys: [EventHotKeyRef] = []
@@ -19,8 +20,10 @@ final class HotKeyManager {
         installEventHandler()
     }
 
-    deinit {
-        unregisterAll()
+    isolated deinit {
+        for hotKey in registeredHotKeys {
+            UnregisterEventHotKey(hotKey)
+        }
         if let eventHandler { RemoveEventHandler(eventHandler) }
     }
 
@@ -163,8 +166,10 @@ final class HotKeyManager {
             )
             guard status == noErr else { return status }
             let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
-            if let identifier = manager.hotKeyIdentifiers[hotKeyID.id] {
-                DispatchQueue.main.async { manager.onHotKeyPressed?(identifier) }
+            let identifier = hotKeyID.id
+            Task { @MainActor in
+                guard let action = manager.hotKeyIdentifiers[identifier] else { return }
+                manager.onHotKeyPressed?(action)
             }
             return noErr
         }
@@ -181,7 +186,7 @@ final class HotKeyManager {
 }
 
 
-struct KeyCombo {
+struct KeyCombo: Sendable {
     let keyCode: UInt16
     let modifiers: UInt32
 }

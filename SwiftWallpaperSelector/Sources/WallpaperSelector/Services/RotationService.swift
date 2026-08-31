@@ -1,43 +1,36 @@
+import Combine
 import Foundation
-import AppKit
 
-
-final class RotationService {
-
-    var intervalSeconds: TimeInterval {
-        get { _intervalSeconds }
-        set { updateInterval(newValue) }
-    }
-
-    private(set) var isRunning: Bool = false
-
-    var themeChangeListener: (() -> Void)?
-
+@MainActor
+final class RotationService: NSObject, ObservableObject {
+    @Published private(set) var isRunning = false
+    @Published private(set) var isBusy = false
+    @Published private(set) var lastError: String?
 
     let settingsManager: SettingsManager
+
     private let wallpaperProvider: WallpaperSetting
     private let themeProvider: ThemeProvider
-
-
-    private var timer: DispatchSourceTimer?
-    private var _intervalSeconds: TimeInterval = 0
-    private let queue = DispatchQueue(label: "com.wallpaper-selector.rotation", qos: .utility)
-
+    private let wallpaperLibrary: WallpaperLibrary
+    private var timer: Timer?
+    private var scheduledInterval: TimeInterval?
 
     init(
         settingsManager: SettingsManager,
         wallpaperProvider: WallpaperSetting,
-        themeProvider: ThemeProvider
+        themeProvider: ThemeProvider,
+        wallpaperLibrary: WallpaperLibrary = .shared
     ) {
         self.settingsManager = settingsManager
         self.wallpaperProvider = wallpaperProvider
         self.themeProvider = themeProvider
+        self.wallpaperLibrary = wallpaperLibrary
+        super.init()
     }
 
-    deinit {
-        stop()
+    isolated deinit {
+        timer?.invalidate()
     }
-
 
     func start() {
         let settings = settingsManager.settings
@@ -45,210 +38,200 @@ final class RotationService {
             stop()
             return
         }
-        startTimer(intervalSeconds: TimeInterval(settings.intervalMinutes.rawValue * 60))
+        scheduleTimer(interval: TimeInterval(settings.intervalMinutes.rawValue * 60))
     }
 
     func stop() {
-        timer?.cancel()
+        timer?.invalidate()
         timer = nil
+        scheduledInterval = nil
         isRunning = false
     }
 
     func updateSettings() {
         let settings = settingsManager.settings
-        if settings.intervalMinutes == .off || settings.matchSystemAppearance {
+        guard settings.intervalMinutes != .off, !settings.matchSystemAppearance else {
             stop()
-        } else {
-            startTimer(intervalSeconds: TimeInterval(settings.intervalMinutes.rawValue * 60))
+            return
         }
+
+        let desiredInterval = TimeInterval(settings.intervalMinutes.rawValue * 60)
+        guard !isRunning || scheduledInterval != desiredInterval else { return }
+        scheduleTimer(interval: desiredInterval)
     }
 
     func tick() {
-        performRotation()
+        enqueue(settingsManager.settings.rotationAction)
     }
 
+    func enqueue(_ action: RotationAction) {
+        guard !isBusy else { return }
+        Task { [weak self] in
+            _ = await self?.perform(action)
+        }
+    }
 
-    private func startTimer(intervalSeconds: TimeInterval) {
-        guard intervalSeconds > 0 else {
+    @discardableResult
+    func perform(_ action: RotationAction) async -> URL? {
+        guard !isBusy else { return nil }
+        isBusy = true
+        lastError = nil
+        defer { isBusy = false }
+
+        switch action {
+        case .themeShuffle:
+            guard selectTheme(direction: .shuffle) else { return nil }
+            return await applySelectedWallpaper(action: .shuffle)
+        case .themeNext:
+            guard selectTheme(direction: .next) else { return nil }
+            return await applySelectedWallpaper(action: .shuffle)
+        case .themePrevious:
+            guard selectTheme(direction: .previous) else { return nil }
+            return await applySelectedWallpaper(action: .shuffle)
+        case .shuffle, .next, .previous:
+            return await applySelectedWallpaper(action: action)
+        }
+    }
+
+    @discardableResult
+    func apply(_ url: URL) -> Bool {
+        do {
+            try wallpaperProvider.setWallpaper(url)
+            settingsManager.update { settings in
+                settings.currentWallpaper = url.path
+                settings.recordWallpaperInHistory(url.path)
+            }
+            lastError = nil
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func scheduleTimer(interval: TimeInterval) {
+        guard interval > 0 else {
             stop()
             return
         }
-        if isRunning {
-            stop()
-        }
-        stop()
 
-        let source = DispatchSource.makeTimerSource(queue: queue)
-        source.schedule(
-            deadline: .now() + intervalSeconds,
-            repeating: intervalSeconds
+        timer?.invalidate()
+        let timer = Timer(
+            timeInterval: interval,
+            target: self,
+            selector: #selector(timerDidFire),
+            userInfo: nil,
+            repeats: true
         )
-        source.setEventHandler { [weak self] in
-            self?.performRotation()
-        }
-        source.resume()
-        timer = source
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        scheduledInterval = interval
         isRunning = true
     }
 
-    private func updateInterval(_ newValue: TimeInterval) {
-        _intervalSeconds = newValue
-        if isRunning {
-            if newValue <= 0 {
-                stop()
-            } else {
-                startTimer(intervalSeconds: newValue)
-            }
-        }
+    @objc private func timerDidFire() {
+        tick()
     }
 
-    private func performRotation() {
-        let settings = settingsManager.settings
+    private func applySelectedWallpaper(action: RotationAction) async -> URL? {
+        let folders = themeProvider.effectiveFolders()
+        guard !folders.isEmpty else { return nil }
 
-        switch settings.rotationAction {
-        case .themeShuffle:
-            applyThemeRotation(direction: "random")
-        case .themeNext:
-            applyThemeRotation(direction: "next")
-        case .themePrevious:
-            applyThemeRotation(direction: "previous")
-        default:
-            let folders = themeProvider.effectiveFolders()
-            guard !folders.isEmpty else { return }
-
-            guard let url = selectNextWallpaper(
-                from: folders,
-                action: settings.rotationAction,
-                history: settings.wallpaperHistory,
-                historyLimit: settings.historyLimit
-            ) else { return }
-
-            applyWallpaper(url)
-        }
-    }
-
-    private func applyWallpaper(_ url: URL) {
-        settingsManager.update { s in
-            s.currentWallpaper = url.path
-            s.recordWallpaperInHistory(url.path)
-        }
-
-        do {
-            try wallpaperProvider.setWallpaper(url, forAllScreens: true)
-        } catch {
-            print("[RotationService] Failed to set wallpaper: \(error)")
-        }
-    }
-
-    func applyThemeRotation(direction: String) {
-        let settings = settingsManager.settings
-        let themes = settings.themes
-        guard !themes.isEmpty else { return }
-
-        let currentIndex = themes.firstIndex { $0.id == settings.activeThemeID }
-
-        let newIndex: Int
-        switch direction {
-        case "random":
-            var candidates = Array(themes.indices)
-            if let currentIndex = currentIndex {
-                candidates.removeAll { $0 == currentIndex }
-            }
-            newIndex = candidates.randomElement() ?? currentIndex ?? 0
-        case "next":
-            newIndex = ((currentIndex ?? -1) + 1) % themes.count
-        case "previous":
-            let step = (currentIndex ?? 0) - 1
-            newIndex = step < 0 ? themes.count - 1 : step
-        default:
-            return
-        }
-
-        guard newIndex != currentIndex else { return }
-
-        let theme = themes[newIndex]
-        settingsManager.update { s in
-            s.activeThemeID = theme.id
-        }
-        themeChangeListener?()
-
-        guard let url = randomWallpaperURL(from: themeProvider.effectiveFolders()) else { return }
-        applyWallpaper(url)
-    }
-
-    private func randomWallpaperURL(from folders: [String]) -> URL? {
-        let images = ImageDiscoveryService.collectImageURLs(from: folders)
+        let images = await wallpaperLibrary.imageURLs(in: folders)
         guard !images.isEmpty else { return nil }
-        return shuffleSelection(
-            from: images,
-            excluding: settingsManager.settings.wallpaperHistory,
-            currentPath: settingsManager.settings.currentWallpaper
-        )
-    }
 
-    private func selectNextWallpaper(
-        from folders: [String],
-        action: RotationAction,
-        history: [String],
-        historyLimit: Int
-    ) -> URL? {
-        let allImages = ImageDiscoveryService.collectImageURLs(from: folders)
-        guard !allImages.isEmpty else { return nil }
-
-        let currentPath = settingsManager.settings.currentWallpaper
-
+        let settings = settingsManager.settings
+        let selected: URL
         switch action {
         case .shuffle:
-            return shuffleSelection(from: allImages, excluding: history, currentPath: currentPath)
+            selected = shuffleSelection(
+                from: images,
+                excluding: settings.wallpaperHistory,
+                currentPath: settings.currentWallpaper
+            )
         case .next:
-            return sequentialSelection(from: allImages, after: currentPath, direction: 1)
+            selected = sequentialSelection(from: images, after: settings.currentWallpaper, direction: 1)
         case .previous:
-            return sequentialSelection(from: allImages, after: currentPath, direction: -1)
-        default:
+            selected = sequentialSelection(from: images, after: settings.currentWallpaper, direction: -1)
+        case .themeShuffle, .themeNext, .themePrevious:
             return nil
         }
+
+        return apply(selected) ? selected : nil
+    }
+
+    private enum ThemeDirection {
+        case shuffle
+        case next
+        case previous
+    }
+
+    private func selectTheme(direction: ThemeDirection) -> Bool {
+        let settings = settingsManager.settings
+        let themes = settings.themes
+        guard !themes.isEmpty else { return false }
+
+        let currentIndex = themes.firstIndex { $0.id == settings.activeThemeID }
+        let newIndex: Int
+
+        switch direction {
+        case .shuffle:
+            let alternatives = themes.indices.filter { $0 != currentIndex }
+            newIndex = alternatives.randomElement() ?? currentIndex ?? 0
+        case .next:
+            newIndex = ((currentIndex ?? -1) + 1) % themes.count
+        case .previous:
+            let previousIndex = (currentIndex ?? 0) - 1
+            newIndex = previousIndex < 0 ? themes.count - 1 : previousIndex
+        }
+
+        guard newIndex != currentIndex else { return false }
+        settingsManager.update { $0.activeThemeID = themes[newIndex].id }
+        return true
     }
 
     private func shuffleSelection(
-        from allImages: [URL],
+        from images: [URL],
         excluding history: [String],
         currentPath: String?
     ) -> URL {
-        let candidates = allImages.filter { url in
-            !history.contains(url.path) && url.path != currentPath
+        let unseen = images.filter { !history.contains($0.path) && $0.path != currentPath }
+        if let selected = unseen.randomElement() {
+            return selected
         }
-        let pool = candidates.isEmpty ? allImages : candidates
-        return pool.randomElement() ?? allImages.first!
+
+        let alternatives = images.filter { $0.path != currentPath }
+        return alternatives.randomElement() ?? images[0]
     }
 
     private func sequentialSelection(
-        from allImages: [URL],
+        from images: [URL],
         after currentPath: String?,
         direction: Int
     ) -> URL {
-        guard let currentPath = currentPath,
-              let currentIndex = allImages.firstIndex(where: { $0.path == currentPath }) else {
-            return direction > 0 ? allImages.first! : allImages.last!
+        guard let currentPath,
+              let currentIndex = images.firstIndex(where: { $0.path == currentPath }) else {
+            return direction > 0 ? images[0] : images[images.count - 1]
         }
 
         let nextIndex = currentIndex + direction
-        if nextIndex >= allImages.count {
-            return allImages.first!
-        } else if nextIndex < 0 {
-            return allImages.last!
-        } else {
-            return allImages[nextIndex]
+        if nextIndex >= images.count {
+            return images[0]
         }
+        if nextIndex < 0 {
+            return images[images.count - 1]
+        }
+        return images[nextIndex]
     }
 }
-
 
 extension WallpaperSettings {
     mutating func recordWallpaperInHistory(_ path: String) {
         wallpaperHistory.removeAll { $0 == path }
         wallpaperHistory.insert(path, at: 0)
-        if wallpaperHistory.count > historyLimit {
-            wallpaperHistory = Array(wallpaperHistory.prefix(historyLimit))
+        let validLimit = max(1, historyLimit)
+        if wallpaperHistory.count > validLimit {
+            wallpaperHistory = Array(wallpaperHistory.prefix(validLimit))
         }
     }
 }

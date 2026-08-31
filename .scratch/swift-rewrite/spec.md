@@ -7,7 +7,7 @@ The user wants to replace the existing Electron/Node.js (Glaze-based) wallpaper 
 Create a new Xcode/Swift Package Manager project that contains a single macOS app target configured as an accessory (menu‑bar‑only) application. The app will:
 
 - Store user settings as JSON in `~/Library/Application Support/<bundle-id>/settings.json` (with an option to relocate the file to a custom folder for power users).
-- Use `NSWorkspace.shared.setDesktopImageURL(_:for:options:)` to set the wallpaper, iterating over `NSScreen.screens` to cover all spaces without invoking System Settings UI scripting.
+- Use `NSWorkspace.shared.setDesktopImageURL(_:for:options:)` to set the wallpaper on every attached display. The separate “All Spaces” setting updates macOS’s “Show on all Spaces” control through Accessibility, with a clear manual fallback when permission or the control is unavailable.
 - Manage a rotation timer with `DispatchSourceTimer` (or `Timer` + `RunLoop`) that dispatches async work to avoid blocking the timer thread.
 - Provide a dynamic menu bar extra built from SwiftUI/AppKit that reflects folders, themes, rotation controls, “All Spaces” toggle, “Match Appearance” switch, and Settings.
 - Offer a Settings window (SwiftUI or AppKit) where users can adjust launch‑at‑login, global shortcuts, recent‑wallpapers count, and choose a custom settings folder.
@@ -29,7 +29,7 @@ Create a new Xcode/Swift Package Manager project that contains a single macOS ap
 10. As a user, I want to pin a specific light and/or dark wallpaper to the active scope (theme or “All Folders”) so that a particular image is always used for that appearance, while still allowing a fallback to a random pick from the scope when no pinned image is set.
 11. As a user, I want to see a list of recently applied wallpapers in the menu bar so I can quickly re‑apply a favorite without searching through folders.
 12. As a user, I want to control how many recent wallpapers are remembered (5, 10, or 20) so I can balance history length with menu clutter.
-13. As a user, I want to enable the “Apply to All Spaces” option so that my wallpaper appears on every desktop/spaces, and I want this to be done efficiently via direct `NSWorkspace` calls per screen rather than scripting System Settings.
+13. As a user, I want to enable the “Apply to All Spaces” option so that macOS’s “Show on all Spaces” setting follows my preference, while wallpaper application itself still updates every attached display through `NSWorkspace`.
 14. As a user, I want to launch the app automatically at login so my wallpaper preferences are always active after I sign in.
 15. As a user, I want to assign global keyboard shortcuts (Show Main Window, Show Preview, Open Menu Bar Menu) so I can access the app’s features without using the mouse.
 16. As a power user, I want to relocate the settings file to a custom directory (e.g., a dotfiles repo) so I can version‑control and synchronize my preferences across machines.
@@ -38,7 +38,7 @@ Create a new Xcode/Swift Package Manager project that contains a single macOS ap
 
 ## Additional Notes
 
-- The app will target macOS 13+ (or the minimum version the team decides) and use only public APIs; no reliance on `osascript` or AppleScript.
+- The app targets macOS 13+ and uses public APIs. It does not invoke `osascript` or embed AppleScript; Accessibility automation is isolated to the system “Show on all Spaces” control and safely falls back to manual completion.
 - The `wallpaper-img://` custom protocol used by the Electron version is unnecessary because SwiftUI/AppKit can load local file URLs directly.
 - All asynchronous work (e.g., reading image directories) will be performed off the main timer thread to keep the UI responsive.
 - The settings file will be watched for external changes (using a `DispatchSourceFileSystemObject`) so that manual edits are reflected immediately.

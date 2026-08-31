@@ -1,6 +1,6 @@
 # 02 — Wallpaper service implementation
 
-**What to build:** Implement a `WallpaperProvider` that sets the desktop picture using `NSWorkspace.shared.setDesktopImageURL(_:for:options:)`. Provide a method to set the wallpaper on all screens (to simulate “All Spaces”) without invoking System Settings UI scripting.
+**What to build:** Implement a `WallpaperProvider` that sets the desktop picture using `NSWorkspace.shared.setDesktopImageURL(_:for:options:)` on every attached display. Treat macOS’s separate “Show on all Spaces” preference as Accessibility integration owned outside the provider.
 
 **Blocked by:** 01 (needs access to settings for currentWallpaper, but can work standalone).
 

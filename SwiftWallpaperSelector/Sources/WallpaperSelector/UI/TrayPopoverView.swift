@@ -200,14 +200,14 @@ struct TrayPopoverView_Previews: PreviewProvider {
             wallpaperProvider: wallpaperProvider,
             themeProvider: themeProvider
         )
+        let appState = AppState(
+            settingsManager: settingsManager,
+            rotationService: rotationService,
+            themeProvider: themeProvider
+        )
 
         return TrayPopoverView()
-            .environmentObject(TrayPopoverViewModel(
-                settingsManager: settingsManager,
-                wallpaperProvider: wallpaperProvider,
-                themeProvider: themeProvider,
-                rotationService: rotationService
-            ))
+            .environmentObject(TrayPopoverViewModel(appState: appState))
             .frame(width: 300, height: 528)
     }
 }

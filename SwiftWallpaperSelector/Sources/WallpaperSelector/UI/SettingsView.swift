@@ -53,6 +53,13 @@ struct SettingsView: View {
                             Button("Default", action: viewModel.useDefaultSettingsFolder)
                         }
                     }
+
+                    if let errorMessage = viewModel.settingsErrorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .textSelection(.enabled)
+                    }
                 }
                 }
 
@@ -238,7 +245,9 @@ struct SettingsView: View {
             AddFolderView { viewModel.addFolder($0) }
         }
         .sheet(isPresented: $showingAddTheme) {
-            AddThemeView { viewModel.addTheme($0) }
+            AddThemeView(availableFolders: viewModel.folderPaths) {
+                viewModel.addTheme($0)
+            }
         }
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
     }
@@ -341,8 +350,10 @@ final class KeyboardCaptureHost: NSView {
         103: "F11", 111: "F12"
     ]
 
-    deinit {
-        endCapturing()
+    isolated deinit {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     private func beginCapturing() {

@@ -1,78 +1,67 @@
-import Foundation
 import AppKit
+import Foundation
 
-
+@MainActor
 protocol WallpaperSetting {
-    func setWallpaper(_ url: URL, forAllScreens: Bool) throws
+    func setWallpaper(_ url: URL) throws
 }
 
-
+@MainActor
 final class WallpaperProvider: WallpaperSetting {
-    func currentWallpaperURL() -> URL? {
-        let workspace = NSWorkspace.shared
-        guard let screen = NSScreen.main else { return nil }
-        return workspace.desktopImageURL(for: screen)
-    }
+    typealias ApplyToDisplays = (_ url: URL) -> [Result<Void, Error>]
 
-    func setWallpaper(_ url: URL, forAllScreens: Bool) throws {
-        let workspace = NSWorkspace.shared
-        let screens = NSScreen.screens
+    private let applyToDisplays: ApplyToDisplays
 
-        if forAllScreens {
-            var lastError: Error?
-            for screen in screens {
-                do {
+    init(applyToDisplays: ApplyToDisplays? = nil) {
+        self.applyToDisplays = applyToDisplays ?? { url in
+            let workspace = NSWorkspace.shared
+            return NSScreen.screens.map { screen in
+                Result {
                     try workspace.setDesktopImageURL(url, for: screen, options: [:])
-                } catch {
-                    lastError = error
-                    print("[WallpaperProvider] Failed to set wallpaper on screen: \(error)")
                 }
             }
-            if let lastError {
-                throw lastError
-            }
-        } else {
-            guard let screen = NSScreen.main else {
-                throw WallpaperProviderError.noMainScreen
-            }
-            do {
-                try workspace.setDesktopImageURL(url, for: screen, options: [:])
-            } catch {
-                throw WallpaperProviderError.failedToSet(error)
-            }
+        }
+    }
+
+    func setWallpaper(_ url: URL) throws {
+        guard url.isFileURL, FileManager.default.fileExists(atPath: url.path) else {
+            throw WallpaperProviderError.invalidWallpaper(url)
+        }
+
+        let results = applyToDisplays(url)
+        guard !results.isEmpty else {
+            throw WallpaperProviderError.noScreens
+        }
+
+        let failures = results.compactMap { result -> Error? in
+            guard case .failure(let error) = result else { return nil }
+            return error
+        }
+
+        if let lastFailure = failures.last {
+            throw WallpaperProviderError.failedToSetOnDisplays(
+                failedCount: failures.count,
+                totalCount: results.count,
+                underlying: lastFailure
+            )
         }
     }
 }
 
 
 enum WallpaperProviderError: Error, LocalizedError {
-    case noMainScreen
-    case failedToSet(Error)
+    case invalidWallpaper(URL)
+    case noScreens
+    case failedToSetOnDisplays(failedCount: Int, totalCount: Int, underlying: Error)
 
     var errorDescription: String? {
         switch self {
-        case .noMainScreen: return "No main screen available."
-        case .failedToSet(let underlying): return "Failed to set wallpaper: \(underlying.localizedDescription)"
+        case .invalidWallpaper(let url):
+            return "Wallpaper does not exist: \(url.path)"
+        case .noScreens:
+            return "No connected displays are available."
+        case .failedToSetOnDisplays(let failedCount, let totalCount, let underlying):
+            return "Failed to set wallpaper on \(failedCount) of \(totalCount) displays: \(underlying.localizedDescription)"
         }
-    }
-}
-
-
-final class MockWallpaperProvider: WallpaperSetting {
-    private(set) var calls: [(url: URL, forAllScreens: Bool)] = []
-    var throwError: Bool = false
-    var errorToThrow: Error?
-
-    func setWallpaper(_ url: URL, forAllScreens: Bool) throws {
-        calls.append((url, forAllScreens))
-        if throwError {
-            throw errorToThrow ?? WallpaperProviderError.failedToSet(NSError(domain: "Mock", code: -1))
-        }
-    }
-
-    func reset() {
-        calls = []
-        throwError = false
-        errorToThrow = nil
     }
 }

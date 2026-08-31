@@ -1,34 +1,39 @@
 import XCTest
 @testable import WallpaperSelector
 
+@MainActor
 final class MenuBarViewModelTests: XCTestCase {
+    var settingsContext: TestSettingsContext!
+    var settingsManager: SettingsManager!
+    var wallpaperProvider: MockWallpaperProvider!
+    var wallpaperLibrary: WallpaperLibrary!
     var appState: AppState!
     var rotationService: RotationService!
     var themeProvider: ThemeProvider!
     var viewModel: MenuBarViewModel!
 
     override func setUpWithError() throws {
-        let settingsManager = SettingsManager()
-        let wallpaperProvider = WallpaperProvider()
+        settingsContext = try TestSettingsContext()
+        settingsManager = settingsContext.makeSettingsManager()
+        wallpaperProvider = MockWallpaperProvider()
+        wallpaperLibrary = WallpaperLibrary()
 
         themeProvider = ThemeProvider(settingsManager: settingsManager)
         rotationService = RotationService(
             settingsManager: settingsManager,
             wallpaperProvider: wallpaperProvider,
-            themeProvider: themeProvider
+            themeProvider: themeProvider,
+            wallpaperLibrary: wallpaperLibrary
         )
 
         appState = AppState(
             settingsManager: settingsManager,
+            rotationService: rotationService,
             themeProvider: themeProvider,
-            wallpaperProvider: wallpaperProvider
+            wallpaperLibrary: wallpaperLibrary
         )
 
-        viewModel = MenuBarViewModel(
-            appState: appState,
-            rotationService: rotationService,
-            themeProvider: themeProvider
-        )
+        viewModel = MenuBarViewModel(appState: appState)
     }
 
     override func tearDownWithError() throws {
@@ -37,6 +42,10 @@ final class MenuBarViewModelTests: XCTestCase {
         rotationService = nil
         themeProvider = nil
         viewModel = nil
+        wallpaperLibrary = nil
+        wallpaperProvider = nil
+        settingsManager = nil
+        settingsContext = nil
     }
 
     func testInitialState() {

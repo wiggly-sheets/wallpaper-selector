@@ -1,6 +1,6 @@
 import Foundation
 
-public struct Shortcuts: Codable, Equatable {
+public struct Shortcuts: Codable, Equatable, Sendable {
     public var showMain: String?
     public var showPreview: String?
     public var showMenu: String?

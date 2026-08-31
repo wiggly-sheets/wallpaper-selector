@@ -6,6 +6,9 @@ struct WallpaperSelectorApp: App {
     @StateObject private var coordinator = AppCoordinator()
 
     var body: some Scene {
-        Settings { EmptyView() }
+        Settings {
+            SettingsView()
+                .environmentObject(coordinator.settingsViewModel)
+        }
     }
 }

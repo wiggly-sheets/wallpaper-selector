@@ -1,92 +1,164 @@
 import Foundation
 import Combine
 
+enum SettingsManagerError: LocalizedError, Equatable {
+    case createDirectoryFailed(path: String, reason: String)
+    case readFailed(path: String, reason: String)
+    case decodeFailed(path: String, reason: String)
+    case encodeFailed(reason: String)
+    case writeFailed(path: String, reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .createDirectoryFailed(path, reason):
+            return "Could not create the settings folder at \(path): \(reason)"
+        case let .readFailed(path, reason):
+            return "Could not read settings from \(path): \(reason)"
+        case let .decodeFailed(path, reason):
+            return "The settings file at \(path) is not valid: \(reason)"
+        case let .encodeFailed(reason):
+            return "Could not encode settings: \(reason)"
+        case let .writeFailed(path, reason):
+            return "Could not save settings to \(path): \(reason)"
+        }
+    }
+}
+
+@MainActor
 final class SettingsManager: ObservableObject {
 
-    static let defaultSettingsDirectory: URL = {
+    nonisolated static let defaultSettingsDirectory: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return appSupport.appendingPathComponent("WallpaperSelector", isDirectory: true)
     }()
 
-    static let bundleID = "com.wallpaper-selector.macos"
+    nonisolated static let bundleID = "com.wallpaper-selector.macos"
+    nonisolated static let customDirectoryDefaultsKey = "WallpaperSelector.settingsDirectory"
 
     private(set) var settingsDirectory: URL
     private(set) var settingsURL: URL
 
-    @Published private(set) var settings: WallpaperSettings = .init() {
-        didSet { if !isLoading { save() } }
-    }
+    @Published private(set) var settings: WallpaperSettings = .init()
+    @Published private(set) var lastError: SettingsManagerError?
 
     var onSettingsChanged: (() -> Void)?
+    var onError: ((SettingsManagerError) -> Void)?
 
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
-    private let fileManager = FileManager.default
+    private var pendingExternalChangeTask: Task<Void, Never>?
+    private let fileManager: FileManager
     private let queue = DispatchQueue(label: "com.wallpaper-selector.settings", qos: .utility)
-    private static let customDirectoryDefaultsKey = "WallpaperSelector.settingsDirectory"
-    private var isLoading = false
+    private let userDefaults: UserDefaults
+    private let configuredDefaultSettingsDirectory: URL
+    private let migrateLegacySettings: Bool
 
 
-    init(settingsDirectory requestedDirectory: URL? = nil) {
-        let storedDirectory = UserDefaults.standard.string(forKey: Self.customDirectoryDefaultsKey).map(URL.init(fileURLWithPath:))
-        settingsDirectory = requestedDirectory ?? storedDirectory ?? Self.defaultSettingsDirectory
+    init(
+        settingsDirectory requestedDirectory: URL? = nil,
+        userDefaults: UserDefaults = .standard,
+        defaultSettingsDirectory: URL = SettingsManager.defaultSettingsDirectory,
+        fileManager: FileManager = .default,
+        migrateLegacySettings: Bool = true
+    ) {
+        self.fileManager = fileManager
+        self.userDefaults = userDefaults
+        self.configuredDefaultSettingsDirectory = defaultSettingsDirectory.standardizedFileURL
+        self.migrateLegacySettings = migrateLegacySettings
+
+        let storedDirectory = userDefaults
+            .string(forKey: Self.customDirectoryDefaultsKey)
+            .map(URL.init(fileURLWithPath:))
+        settingsDirectory = (requestedDirectory ?? storedDirectory ?? defaultSettingsDirectory).standardizedFileURL
         settingsURL = settingsDirectory.appendingPathComponent("settings.json")
-        ensureDirectoryExists()
-        if requestedDirectory == nil { migrateFromLegacyIfNeeded() }
-        load()
+
+        prepareInitialSettings(shouldMigrateLegacy: requestedDirectory == nil)
         startFileWatcher()
     }
 
     deinit {
-        stopFileWatcher()
+        pendingExternalChangeTask?.cancel()
+        fileWatcherSource?.cancel()
+        fileWatcherSource = nil
     }
 
 
-    func update(_ mutation: (inout WallpaperSettings) -> Void) {
-        var newValue = self.settings
+    var isUsingDefaultSettingsDirectory: Bool {
+        settingsDirectory.resolvingSymlinksInPath().path
+            == configuredDefaultSettingsDirectory.resolvingSymlinksInPath().path
+    }
+
+    @discardableResult
+    func update(_ mutation: (inout WallpaperSettings) -> Void) -> Result<Void, SettingsManagerError> {
+        var newValue = settings
         mutation(&newValue)
-        self.settings = newValue
-        onSettingsChanged?()
+        return replace(newValue)
     }
 
-    func replace(_ newSettings: WallpaperSettings) {
-        settings = newSettings
-        onSettingsChanged?()
+    @discardableResult
+    func replace(_ newSettings: WallpaperSettings) -> Result<Void, SettingsManagerError> {
+        let normalizedSettings = newSettings.normalized()
+        do {
+            try persist(normalizedSettings, to: settingsURL)
+            settings = normalizedSettings
+            clearError()
+            onSettingsChanged?()
+            return .success(())
+        } catch let error as SettingsManagerError {
+            report(error)
+            return .failure(error)
+        } catch {
+            let wrapped = SettingsManagerError.writeFailed(path: settingsURL.path, reason: error.localizedDescription)
+            report(wrapped)
+            return .failure(wrapped)
+        }
     }
 
     func relocateSettings(to directory: URL) throws {
-        let normalized = directory.standardizedFileURL
-        guard normalized.path != settingsDirectory.path else { return }
-        try fileManager.createDirectory(at: normalized, withIntermediateDirectories: true)
-
-        stopFileWatcher()
-        settingsDirectory = normalized
-        settingsURL = normalized.appendingPathComponent("settings.json")
-        UserDefaults.standard.set(normalized.path, forKey: Self.customDirectoryDefaultsKey)
-        save()
-        startFileWatcher()
-        onSettingsChanged?()
+        try switchSettingsLocation(to: directory, customDirectoryPath: directory.standardizedFileURL.path)
     }
 
     func useDefaultSettingsLocation() throws {
-        try relocateSettings(to: Self.defaultSettingsDirectory)
-        UserDefaults.standard.removeObject(forKey: Self.customDirectoryDefaultsKey)
+        try switchSettingsLocation(to: configuredDefaultSettingsDirectory, customDirectoryPath: nil)
     }
 
 
-    private func migrateFromLegacyIfNeeded() {
-        guard let legacyURL = Self.legacySettingsURL else { return }
-        guard fileManager.fileExists(atPath: legacyURL.path) else { return }
-        guard !fileManager.fileExists(atPath: settingsURL.path) else { return }
+    private func prepareInitialSettings(shouldMigrateLegacy: Bool) {
+        do {
+            try createDirectoryIfNeeded(at: settingsDirectory)
+
+            if shouldMigrateLegacy,
+               migrateLegacySettings,
+               !fileManager.fileExists(atPath: settingsURL.path),
+               let migrated = try loadLegacySettingsIfAvailable() {
+                try persist(migrated, to: settingsURL)
+                settings = migrated
+                return
+            }
+
+            if fileManager.fileExists(atPath: settingsURL.path) {
+                settings = try loadSettings(from: settingsURL)
+            } else {
+                try persist(settings, to: settingsURL)
+            }
+        } catch let error as SettingsManagerError {
+            report(error)
+        } catch {
+            report(.readFailed(path: settingsURL.path, reason: error.localizedDescription))
+        }
+    }
+
+    private func loadLegacySettingsIfAvailable() throws -> WallpaperSettings? {
+        guard let legacyURL = Self.legacySettingsURL else { return nil }
+        guard fileManager.fileExists(atPath: legacyURL.path) else { return nil }
 
         do {
-            let data = try Data(contentsOf: legacyURL)
-            let decoded = try JSONDecoder().decode(WallpaperSettings.self, from: data)
-            settings = decoded
-            save()
+            let settings = try loadSettings(from: legacyURL)
             print("[SettingsManager] Migrated settings from legacy Electron location")
-        } catch {
-            print("[SettingsManager] Failed to migrate legacy settings: \(error)")
+            return settings
+        } catch let error as SettingsManagerError {
+            report(error)
+            return nil
         }
     }
 
@@ -98,54 +170,107 @@ final class SettingsManager: ObservableObject {
     }
 
 
-    private func ensureDirectoryExists() {
-        try? fileManager.createDirectory(
-            at: settingsDirectory,
-            withIntermediateDirectories: true,
-            attributes: nil
-        )
+    private func switchSettingsLocation(to directory: URL, customDirectoryPath: String?) throws {
+        let normalized = directory.standardizedFileURL
+        let destinationURL = normalized.appendingPathComponent("settings.json")
+
+        do {
+            try createDirectoryIfNeeded(at: normalized)
+
+            let destinationSettings: WallpaperSettings
+            if fileManager.fileExists(atPath: destinationURL.path) {
+                // Adopting a synchronized folder must never overwrite its existing settings.
+                destinationSettings = try loadSettings(from: destinationURL)
+            } else {
+                destinationSettings = settings
+                try persist(destinationSettings, to: destinationURL)
+            }
+
+            stopFileWatcher()
+            settingsDirectory = normalized
+            settingsURL = destinationURL
+            settings = destinationSettings
+
+            if let customDirectoryPath {
+                userDefaults.set(customDirectoryPath, forKey: Self.customDirectoryDefaultsKey)
+            } else {
+                userDefaults.removeObject(forKey: Self.customDirectoryDefaultsKey)
+            }
+
+            clearError()
+            startFileWatcher()
+            onSettingsChanged?()
+        } catch let error as SettingsManagerError {
+            report(error)
+            throw error
+        } catch {
+            let wrapped = SettingsManagerError.readFailed(path: destinationURL.path, reason: error.localizedDescription)
+            report(wrapped)
+            throw wrapped
+        }
     }
 
-    private func load() {
-        guard fileManager.fileExists(atPath: settingsURL.path) else {
-            save()
-            return
-        }
+    private func createDirectoryIfNeeded(at directory: URL) throws {
         do {
-            let data = try Data(contentsOf: settingsURL)
-            isLoading = true
-            defer { isLoading = false }
-            let decoded = try JSONDecoder().decode(WallpaperSettings.self, from: data)
-            settings = decoded
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
         } catch {
-            print("[SettingsManager] Failed to load settings, using defaults: \(error)")
-            isLoading = true
-            settings = .init()
-            isLoading = false
+            throw SettingsManagerError.createDirectoryFailed(
+                path: directory.path,
+                reason: error.localizedDescription
+            )
         }
     }
 
-    private func save() {
+    private func loadSettings(from url: URL) throws -> WallpaperSettings {
+        let data: Data
         do {
-            let data = try JSONEncoder().encode(settings)
-            try data.write(to: settingsURL, options: [.atomic])
+            data = try Data(contentsOf: url)
         } catch {
-            print("[SettingsManager] Failed to save settings: \(error)")
+            throw SettingsManagerError.readFailed(path: url.path, reason: error.localizedDescription)
+        }
+
+        do {
+            return try JSONDecoder().decode(WallpaperSettings.self, from: data).normalized()
+        } catch {
+            throw SettingsManagerError.decodeFailed(path: url.path, reason: error.localizedDescription)
+        }
+    }
+
+    private func persist(_ settings: WallpaperSettings, to url: URL) throws {
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(settings.normalized())
+        } catch {
+            throw SettingsManagerError.encodeFailed(reason: error.localizedDescription)
+        }
+
+        do {
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            throw SettingsManagerError.writeFailed(path: url.path, reason: error.localizedDescription)
         }
     }
 
 
     private func startFileWatcher() {
+        guard fileWatcherSource == nil else { return }
+
         let fd = open(settingsURL.path, O_EVTONLY)
         guard fd >= 0 else { return }
 
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
-            eventMask: [.write, .extend, .attrib, .rename],
+            eventMask: [.write, .extend, .attrib, .rename, .delete],
             queue: queue
         )
         source.setEventHandler { [weak self] in
-            self?.handleExternalChange()
+            Task { @MainActor [weak self] in
+                self?.scheduleExternalChangeHandling()
+            }
         }
         source.setCancelHandler { close(fd) }
         source.resume()
@@ -157,13 +282,52 @@ final class SettingsManager: ObservableObject {
         fileWatcherSource = nil
     }
 
-    private func handleExternalChange() {
-        queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self = self else { return }
-            self.stopFileWatcher()
-            self.load()
-            self.startFileWatcher()
-            self.onSettingsChanged?()
+    private func scheduleExternalChangeHandling() {
+        pendingExternalChangeTask?.cancel()
+        pendingExternalChangeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            self?.handleExternalChange()
         }
+    }
+
+    private func handleExternalChange() {
+        pendingExternalChangeTask = nil
+        stopFileWatcher()
+
+        do {
+            if fileManager.fileExists(atPath: settingsURL.path) {
+                let reloaded = try loadSettings(from: settingsURL)
+                if reloaded != settings {
+                    settings = reloaded
+                    onSettingsChanged?()
+                }
+            } else {
+                // An atomic writer temporarily replaces the watched inode. If no replacement
+                // arrives, recreate the deleted file from the last known-good in-memory state.
+                try createDirectoryIfNeeded(at: settingsDirectory)
+                try persist(settings, to: settingsURL)
+                onSettingsChanged?()
+            }
+            clearError()
+        } catch let error as SettingsManagerError {
+            // Keep the last known-good settings and leave malformed external data untouched.
+            report(error)
+        } catch {
+            report(.readFailed(path: settingsURL.path, reason: error.localizedDescription))
+        }
+
+        startFileWatcher()
+    }
+
+
+    private func report(_ error: SettingsManagerError) {
+        lastError = error
+        onError?(error)
+        print("[SettingsManager] \(error.localizedDescription)")
+    }
+
+    private func clearError() {
+        lastError = nil
     }
 }

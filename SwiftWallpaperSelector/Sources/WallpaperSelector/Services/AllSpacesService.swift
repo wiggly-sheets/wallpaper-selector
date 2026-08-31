@@ -1,83 +1,301 @@
 import AppKit
 import ApplicationServices
+import Foundation
 
+enum AllSpacesManualFallbackReason: Equatable, Sendable {
+    case accessibilityPermissionRequired
+    case couldNotOpenWallpaperSettings
+    case systemSettingsUnavailable
+    case showOnAllSpacesControlNotFound
+    case automationFailed(String)
+}
+
+enum AllSpacesApplicationResult: Equatable, Sendable {
+    case applied(enabled: Bool)
+    case alreadySet(enabled: Bool)
+    case manualActionRequired(enabled: Bool, reason: AllSpacesManualFallbackReason)
+}
+
+enum AllSpacesAutomationResult: Sendable {
+    case applied
+    case alreadySet
+    case manualActionRequired(AllSpacesManualFallbackReason)
+}
+
+/// Serializes Accessibility changes to System Settings.
+///
+/// Every request reads the actual checkbox value. Nothing is inferred from the
+/// last requested value, because the user can change the setting outside this
+/// app at any time.
+@MainActor
 final class AllSpacesService {
-    private let wallpaperSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension")!
-    private var lastAppliedValue: Bool?
-    private let stateLock = NSLock()
+    typealias Completion = @MainActor (AllSpacesApplicationResult) -> Void
+    typealias Automation = @Sendable (_ processIdentifier: pid_t, _ enabled: Bool) -> AllSpacesAutomationResult
 
-    func setEnabled(_ enabled: Bool) {
-        stateLock.lock()
-        let needsApply = lastAppliedValue != enabled
-        stateLock.unlock()
-        guard needsApply else { return }
+    var onResult: Completion?
 
-        NSWorkspace.shared.open(wallpaperSettingsURL)
-        guard AXIsProcessTrusted() else {
+    private struct Request {
+        let enabled: Bool
+        let completion: Completion?
+    }
+
+    private let wallpaperSettingsURL: URL
+    private let openWallpaperSettings: @MainActor (URL) -> Bool
+    private let systemSettingsProcessIdentifier: @MainActor () -> pid_t?
+    private let isAccessibilityTrusted: @MainActor () -> Bool
+    private let requestAccessibilityPermission: @MainActor () -> Void
+    private let automation: Automation
+    private let automationQueue: DispatchQueue
+
+    private var pendingRequests: [Request] = []
+    private var isProcessing = false
+
+    init(
+        wallpaperSettingsURL: URL = URL(
+            string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension"
+        )!,
+        openWallpaperSettings: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) },
+        systemSettingsProcessIdentifier: @escaping @MainActor () -> pid_t? = {
+            NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+                .first?
+                .processIdentifier
+        },
+        isAccessibilityTrusted: @escaping @MainActor () -> Bool = { AXIsProcessTrusted() },
+        requestAccessibilityPermission: @escaping @MainActor () -> Void = {
             AXIsProcessTrustedWithOptions([
-                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+                "AXTrustedCheckOptionPrompt": true
             ] as CFDictionary)
+        },
+        automation: @escaping Automation = { processIdentifier, enabled in
+            AllSpacesService.automate(processIdentifier: processIdentifier, enabled: enabled)
+        },
+        automationQueue: DispatchQueue = DispatchQueue(
+            label: "com.wallpaper-selector.all-spaces",
+            qos: .userInitiated
+        )
+    ) {
+        self.wallpaperSettingsURL = wallpaperSettingsURL
+        self.openWallpaperSettings = openWallpaperSettings
+        self.systemSettingsProcessIdentifier = systemSettingsProcessIdentifier
+        self.isAccessibilityTrusted = isAccessibilityTrusted
+        self.requestAccessibilityPermission = requestAccessibilityPermission
+        self.automation = automation
+        self.automationQueue = automationQueue
+    }
+
+    /// Enqueues an ordered request. The completion and `onResult` are always
+    /// called on the main actor, in the same order as the requests.
+    func setEnabled(_ enabled: Bool, completion: Completion? = nil) {
+        pendingRequests.append(Request(enabled: enabled, completion: completion))
+        processNextRequestIfNeeded()
+    }
+
+    private func processNextRequestIfNeeded() {
+        guard !isProcessing, let request = pendingRequests.first else { return }
+        isProcessing = true
+
+        guard openWallpaperSettings(wallpaperSettingsURL) else {
+            finishCurrentRequest(
+                with: .manualActionRequired(
+                    enabled: request.enabled,
+                    reason: .couldNotOpenWallpaperSettings
+                )
+            )
             return
         }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        guard isAccessibilityTrusted() else {
+            requestAccessibilityPermission()
+            finishCurrentRequest(
+                with: .manualActionRequired(
+                    enabled: request.enabled,
+                    reason: .accessibilityPermissionRequired
+                )
+            )
+            return
+        }
+
+        Task { @MainActor [weak self] in
             guard let self else { return }
-            if self.setCheckboxAndClose(enabled) {
-                self.stateLock.lock()
-                self.lastAppliedValue = enabled
-                self.stateLock.unlock()
-            } else {
-                print("[AllSpacesService] Could not find Show on all Spaces; Wallpaper Settings remains open for manual completion.")
+            guard let processIdentifier = await waitForSystemSettingsProcess() else {
+                finishCurrentRequest(
+                    with: .manualActionRequired(
+                        enabled: request.enabled,
+                        reason: .systemSettingsUnavailable
+                    )
+                )
+                return
+            }
+
+            let automation = self.automation
+            let enabled = request.enabled
+            let automationQueue = self.automationQueue
+            automationQueue.async { [weak self] in
+                let result = automation(processIdentifier, enabled)
+                Task { @MainActor in
+                    self?.finishCurrentRequest(with: Self.applicationResult(from: result, enabled: enabled))
+                }
             }
         }
     }
 
-    @discardableResult
-    private func setCheckboxAndClose(_ enabled: Bool) -> Bool {
+    private func waitForSystemSettingsProcess() async -> pid_t? {
+        for _ in 0..<40 {
+            if let processIdentifier = systemSettingsProcessIdentifier() {
+                return processIdentifier
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return nil
+    }
+
+    private func finishCurrentRequest(with result: AllSpacesApplicationResult) {
+        guard let request = pendingRequests.first else { return }
+        pendingRequests.removeFirst()
+        isProcessing = false
+        request.completion?(result)
+        onResult?(result)
+        processNextRequestIfNeeded()
+    }
+
+    private nonisolated static func applicationResult(
+        from result: AllSpacesAutomationResult,
+        enabled: Bool
+    ) -> AllSpacesApplicationResult {
+        switch result {
+        case .applied:
+            return .applied(enabled: enabled)
+        case .alreadySet:
+            return .alreadySet(enabled: enabled)
+        case .manualActionRequired(let reason):
+            return .manualActionRequired(enabled: enabled, reason: reason)
+        }
+    }
+
+    nonisolated static func automate(
+        processIdentifier: pid_t,
+        enabled: Bool
+    ) -> AllSpacesAutomationResult {
+        let application = AXUIElementCreateApplication(processIdentifier)
+        let deadline = Date().addingTimeInterval(10)
+
+        while Date() < deadline {
+            if let checkbox = findShowOnAllSpacesCheckbox(in: application) {
+                return setCheckbox(checkbox, enabled: enabled)
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+
+        return .manualActionRequired(.showOnAllSpacesControlNotFound)
+    }
+
+    private nonisolated static func findShowOnAllSpacesCheckbox(
+        in application: AXUIElement
+    ) -> AXUIElement? {
+        var remaining: [AXUIElement] = [application]
+        var inspectedElementCount = 0
+
+        while let element = remaining.popLast(), inspectedElementCount < 5_000 {
+            inspectedElementCount += 1
+
+            if stringAttribute(kAXRoleAttribute as CFString, of: element) == kAXCheckBoxRole,
+               metadata(of: element).contains(where: isShowOnAllSpacesMetadata) {
+                return element
+            }
+
+            remaining.append(contentsOf: elementArrayAttribute(kAXChildrenAttribute as CFString, of: element))
+        }
+        return nil
+    }
+
+    private nonisolated static func setCheckbox(
+        _ checkbox: AXUIElement,
+        enabled: Bool
+    ) -> AllSpacesAutomationResult {
         let desiredValue = enabled ? 1 : 0
-        let script = """
-        tell application "System Settings" to activate
+        guard let currentValue = numberAttribute(kAXValueAttribute as CFString, of: checkbox) else {
+            return .manualActionRequired(.automationFailed("The checkbox value could not be read."))
+        }
+        guard currentValue.intValue != desiredValue else { return .alreadySet }
 
-        repeat 40 times
-            if application "System Settings" is frontmost then exit repeat
-            delay 0.25
-        end repeat
+        let pressError = AXUIElementPerformAction(checkbox, kAXPressAction as CFString)
+        guard pressError == .success else {
+            return .manualActionRequired(
+                .automationFailed("Accessibility could not press the checkbox (error \(pressError.rawValue)).")
+            )
+        }
 
-        tell application "System Events"
-            tell process "System Settings"
-                set foundMenuItem to false
-                repeat 40 times
-                    try
-                        if exists (menu item "Wallpaper" of menu "View" of menu bar 1) then
-                            set foundMenuItem to true
-                            exit repeat
-                        end if
-                    end try
-                    delay 0.25
-                end repeat
-                if not foundMenuItem then error "Timed out waiting for View > Wallpaper menu item"
-                click menu item "Wallpaper" of menu "View" of menu bar 1
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if numberAttribute(kAXValueAttribute as CFString, of: checkbox)?.intValue == desiredValue {
+                return .applied
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return .manualActionRequired(.automationFailed("The checkbox did not retain the requested value."))
+    }
 
-                set targetCheckbox to missing value
-                repeat 40 times
-                    try
-                        set targetCheckbox to checkbox "Show on all Spaces" of group 2 of scroll area 1 of group 1 of group 2 of splitter group 1 of group 1 of window 1
-                    end try
-                    if targetCheckbox is not missing value then exit repeat
-                    delay 0.25
-                end repeat
-                if targetCheckbox is missing value then error "Timed out waiting for Show on all Spaces checkbox"
-                if (value of targetCheckbox as integer) is not \(desiredValue) then click targetCheckbox
-            end tell
-        end tell
+    private nonisolated static func metadata(of element: AXUIElement) -> [String] {
+        let attributes: [CFString] = [
+            kAXIdentifierAttribute as CFString,
+            kAXTitleAttribute as CFString,
+            kAXDescriptionAttribute as CFString,
+            kAXHelpAttribute as CFString
+        ]
+        return attributes.compactMap { stringAttribute($0, of: element) }
+    }
 
-        delay 0.2
-        tell application "System Settings" to quit
-        return true
-        """
-        var error: NSDictionary?
-        let result = NSAppleScript(source: script)?.executeAndReturnError(&error)
-        if let error { print("[AllSpacesService] UI scripting failed: \(error)") }
-        return result?.booleanValue ?? false
+    private nonisolated static func isShowOnAllSpacesMetadata(_ value: String) -> Bool {
+        let normalized = value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .unicodeScalars
+            .filter(CharacterSet.alphanumerics.contains)
+            .map(String.init)
+            .joined()
+
+        // AXIdentifier is usually language-independent. The additional labels
+        // cover common System Settings localizations while an unknown layout
+        // safely falls back to manual action rather than toggling the wrong UI.
+        let knownFragments = [
+            "showonallspaces",
+            "aufallenspacesanzeigen",
+            "affichersurtouslesespaces",
+            "mostrarentodoslosespacios",
+            "mostrasututtilispazi",
+            "mostraremtodososespacos",
+            "toonopallespaces",
+            "すべての操作スペースに表示",
+            "在所有空间中显示",
+            "在所有空間中顯示",
+            "모든space에표시"
+        ]
+        return knownFragments.contains(where: normalized.contains)
+    }
+
+    private nonisolated static func stringAttribute(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? String
+    }
+
+    private nonisolated static func numberAttribute(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> NSNumber? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
+        return value as? NSNumber
+    }
+
+    private nonisolated static func elementArrayAttribute(
+        _ attribute: CFString,
+        of element: AXUIElement
+    ) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return [] }
+        return value as? [AXUIElement] ?? []
     }
 }
