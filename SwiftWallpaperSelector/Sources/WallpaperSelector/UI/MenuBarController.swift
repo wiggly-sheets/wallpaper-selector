@@ -130,7 +130,9 @@ final class MenuBarController: NSObject {
 
     func showMenu() {
         rebuildMenu()
-        statusItem?.button?.performClick(nil)
+        guard let button = statusItem?.button, let menu = statusItem?.menu else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
 
     private func buildRotateSubmenu() -> NSMenu? {
