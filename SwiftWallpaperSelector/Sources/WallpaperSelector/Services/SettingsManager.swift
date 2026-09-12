@@ -54,6 +54,13 @@ final class SettingsManager: ObservableObject {
     private let migrateLegacySettings: Bool
 
 
+    private enum ExternalChangeOutcome {
+        case unchanged
+        case reloaded(WallpaperSettings)
+        case recreated
+    }
+
+
     init(
         settingsDirectory requestedDirectory: URL? = nil,
         userDefaults: UserDefaults = .standard,
@@ -99,7 +106,7 @@ final class SettingsManager: ObservableObject {
     func replace(_ newSettings: WallpaperSettings) -> Result<Void, SettingsManagerError> {
         let normalizedSettings = newSettings.normalized()
         do {
-            try persist(normalizedSettings, to: settingsURL)
+            try Self.persist(normalizedSettings, to: settingsURL)
             settings = normalizedSettings
             clearError()
             onSettingsChanged?()
@@ -125,21 +132,21 @@ final class SettingsManager: ObservableObject {
 
     private func prepareInitialSettings(shouldMigrateLegacy: Bool) {
         do {
-            try createDirectoryIfNeeded(at: settingsDirectory)
+            try Self.createDirectoryIfNeeded(at: settingsDirectory, using: fileManager)
 
             if shouldMigrateLegacy,
                migrateLegacySettings,
                !fileManager.fileExists(atPath: settingsURL.path),
                let migrated = try loadLegacySettingsIfAvailable() {
-                try persist(migrated, to: settingsURL)
+                try Self.persist(migrated, to: settingsURL)
                 settings = migrated
                 return
             }
 
             if fileManager.fileExists(atPath: settingsURL.path) {
-                settings = try loadSettings(from: settingsURL)
+                settings = try Self.loadSettings(from: settingsURL)
             } else {
-                try persist(settings, to: settingsURL)
+                try Self.persist(settings, to: settingsURL)
             }
         } catch let error as SettingsManagerError {
             report(error)
@@ -153,7 +160,7 @@ final class SettingsManager: ObservableObject {
         guard fileManager.fileExists(atPath: legacyURL.path) else { return nil }
 
         do {
-            let settings = try loadSettings(from: legacyURL)
+            let settings = try Self.loadSettings(from: legacyURL)
             print("[SettingsManager] Migrated settings from legacy Electron location")
             return settings
         } catch let error as SettingsManagerError {
@@ -175,15 +182,15 @@ final class SettingsManager: ObservableObject {
         let destinationURL = normalized.appendingPathComponent("settings.json")
 
         do {
-            try createDirectoryIfNeeded(at: normalized)
+            try Self.createDirectoryIfNeeded(at: normalized, using: fileManager)
 
             let destinationSettings: WallpaperSettings
             if fileManager.fileExists(atPath: destinationURL.path) {
                 // Adopting a synchronized folder must never overwrite its existing settings.
-                destinationSettings = try loadSettings(from: destinationURL)
+                destinationSettings = try Self.loadSettings(from: destinationURL)
             } else {
                 destinationSettings = settings
-                try persist(destinationSettings, to: destinationURL)
+                try Self.persist(destinationSettings, to: destinationURL)
             }
 
             stopFileWatcher()
@@ -210,7 +217,7 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    private func createDirectoryIfNeeded(at directory: URL) throws {
+    private nonisolated static func createDirectoryIfNeeded(at directory: URL, using fileManager: FileManager) throws {
         do {
             try fileManager.createDirectory(
                 at: directory,
@@ -225,7 +232,7 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    private func loadSettings(from url: URL) throws -> WallpaperSettings {
+    private nonisolated static func loadSettings(from url: URL) throws -> WallpaperSettings {
         let data: Data
         do {
             data = try Data(contentsOf: url)
@@ -240,7 +247,7 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    private func persist(_ settings: WallpaperSettings, to url: URL) throws {
+    private nonisolated static func persist(_ settings: WallpaperSettings, to url: URL) throws {
         let data: Data
         do {
             data = try JSONEncoder().encode(settings.normalized())
@@ -295,29 +302,64 @@ final class SettingsManager: ObservableObject {
         pendingExternalChangeTask = nil
         stopFileWatcher()
 
-        do {
-            if fileManager.fileExists(atPath: settingsURL.path) {
-                let reloaded = try loadSettings(from: settingsURL)
-                if reloaded != settings {
-                    settings = reloaded
-                    onSettingsChanged?()
-                }
-            } else {
-                // An atomic writer temporarily replaces the watched inode. If no replacement
-                // arrives, recreate the deleted file from the last known-good in-memory state.
-                try createDirectoryIfNeeded(at: settingsDirectory)
-                try persist(settings, to: settingsURL)
-                onSettingsChanged?()
-            }
-            clearError()
-        } catch let error as SettingsManagerError {
-            // Keep the last known-good settings and leave malformed external data untouched.
-            report(error)
-        } catch {
-            report(.readFailed(path: settingsURL.path, reason: error.localizedDescription))
-        }
+        let url = settingsURL
+        let directory = settingsDirectory
+        let fallback = settings
 
-        startFileWatcher()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await Self.performExternalChangeIO(
+                url: url,
+                directory: directory,
+                fallback: fallback,
+                fileManager: self.fileManager
+            )
+            guard self.settingsURL == url else { self.startFileWatcher(); return }
+            switch outcome {
+            case .success(.unchanged):
+                self.clearError()
+            case .success(.reloaded(let reloaded)):
+                self.settings = reloaded
+                self.onSettingsChanged?()
+                self.clearError()
+            case .success(.recreated):
+                self.onSettingsChanged?()
+                self.clearError()
+            case .failure(let error):
+                self.report(error)
+            }
+            self.startFileWatcher()
+        }
+    }
+
+    private nonisolated static func performExternalChangeIO(
+        url: URL,
+        directory: URL,
+        fallback: WallpaperSettings,
+        fileManager: FileManager
+    ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
+        if fileManager.fileExists(atPath: url.path) {
+            do {
+                let reloaded = try Self.loadSettings(from: url)
+                return .success(reloaded == fallback ? .unchanged : .reloaded(reloaded))
+            } catch let error as SettingsManagerError {
+                return .failure(error)
+            } catch {
+                return .failure(.readFailed(path: url.path, reason: error.localizedDescription))
+            }
+        } else {
+            // An atomic writer temporarily replaces the watched inode. If no replacement
+            // arrives, recreate the deleted file from the last known-good in-memory state.
+            do {
+                try Self.createDirectoryIfNeeded(at: directory, using: fileManager)
+                try Self.persist(fallback, to: url)
+                return .success(.recreated)
+            } catch let error as SettingsManagerError {
+                return .failure(error)
+            } catch {
+                return .failure(.readFailed(path: url.path, reason: error.localizedDescription))
+            }
+        }
     }
 
 
