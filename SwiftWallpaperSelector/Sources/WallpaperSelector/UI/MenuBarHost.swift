@@ -55,12 +55,6 @@ final class MenuBarHostingViewController: NSViewController {
             name: .ApplyRecentWallpaper,
             object: nil
         )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleMenuBarOpenSettings),
-            name: .MenuBarOpenSettings,
-            object: nil
-        )
 
         if appState.settings.folderPaths.isEmpty {
             DispatchQueue.main.async { [weak self] in self?.showMainWindow() }
@@ -200,10 +194,6 @@ final class MenuBarHostingViewController: NSViewController {
         case .automationFailed(let detail):
             return "The setting could not be changed automatically (\(detail)). \(guidance)"
         }
-    }
-
-    @objc private func handleMenuBarOpenSettings() {
-        openSettings()
     }
 
     @objc private func handleOpenMainWindow() {

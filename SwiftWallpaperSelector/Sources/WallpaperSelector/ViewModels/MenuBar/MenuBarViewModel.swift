@@ -106,10 +106,6 @@ final class MenuBarViewModel: ObservableObject {
         appState.applyPreviousWallpaper()
     }
 
-    func openSettings() {
-        NotificationCenter.default.post(name: .MenuBarOpenSettings, object: nil)
-    }
-
     func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -160,8 +156,4 @@ final class MenuBarViewModel: ObservableObject {
             .flatMap { id in settings.themes.first { $0.id == id }?.displayName }
             ?? "All Folders"
     }
-}
-
-extension Notification.Name {
-    static let MenuBarOpenSettings = Notification.Name("MenuBarOpenSettings")
 }

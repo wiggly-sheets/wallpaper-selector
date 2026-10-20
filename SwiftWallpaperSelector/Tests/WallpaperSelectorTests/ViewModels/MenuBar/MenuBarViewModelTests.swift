@@ -96,12 +96,6 @@ final class MenuBarViewModelTests: XCTestCase {
         XCTAssertEqual(wallpaperProvider.appliedURLs, [folderURL.appendingPathComponent("a.png")])
     }
 
-    func testOpenSettingsPostsNotification() {
-        let expectation = expectation(forNotification: .MenuBarOpenSettings, object: nil)
-        viewModel.openSettings()
-        wait(for: [expectation], timeout: 0.1)
-    }
-
     /// The menu must show the new value right away, not one change later.
     func testSettingsChangeIsVisibleWithoutWaitingForTheRunLoop() {
         XCTAssertFalse(viewModel.allSpaces)
