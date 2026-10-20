@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 
+// shortcut: the enabled state lives in the view model and is tested there, but no test can see whether this binding is negated, upgrade when a UI test harness exists
 struct PickerWindow: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
     @EnvironmentObject var appState: AppState
