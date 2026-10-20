@@ -135,7 +135,7 @@ final class SettingsManagerWriteTests: XCTestCase {
 ///
 /// The gate runs on the write queue, so a test can change the settings while
 /// a write waits.
-private final class WriteGate: @unchecked Sendable {
+final class WriteGate: @unchecked Sendable {
     private let lock = NSLock()
     private var pausesTheNextWrite = false
     private var isWaiting = false

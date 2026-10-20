@@ -44,14 +44,16 @@ final class TestSettingsContext {
 
     func makeSettingsManager(
         at directory: URL? = nil,
-        beforeWrite: (@Sendable () -> Void)? = nil
+        beforeWrite: (@Sendable () -> Void)? = nil,
+        beforeRead: (@Sendable () -> Void)? = nil
     ) -> SettingsManager {
         SettingsManager(
             settingsDirectory: directory ?? settingsDirectory,
             userDefaults: userDefaults,
             defaultSettingsDirectory: defaultSettingsDirectory,
             migrateLegacySettings: false,
-            beforeWrite: beforeWrite
+            beforeWrite: beforeWrite,
+            beforeRead: beforeRead
         )
     }
 

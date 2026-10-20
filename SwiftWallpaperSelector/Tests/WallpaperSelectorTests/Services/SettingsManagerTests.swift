@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import WallpaperSelector
 
@@ -850,6 +851,100 @@ final class SettingsManagerTests: XCTestCase {
         return false
     }
 
+    /// The reload must not revert a change that lands while the file is read.
+    ///
+    /// The settings in memory are the truth and the file follows: the change
+    /// that lands during the read is newer than the snapshot of the file, so
+    /// the snapshot must not overwrite it, and the queued write must persist
+    /// the change instead of the reverted one.
+    func testTheReloadKeepsTheChangeThatLandsWhileTheFileIsRead() async throws {
+        let context = try TestSettingsContext()
+        let readGate = ReadGate()
+        let writeGate = WriteGate()
+        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
+        // The file holds the same settings as the memory, so the reload has
+        // no external change to pick up.
+        try encoded(original).write(to: settingsURL)
+        let manager = context.makeSettingsManager(
+            beforeWrite: { writeGate.beforeWrite() },
+            beforeRead: { readGate.beforeRead() }
+        )
+        XCTAssertEqual(manager.settings, original)
+
+        // The next write waits, so the file keeps the old settings while the
+        // reload reads it.
+        writeGate.pauseTheNextWrite()
+        readGate.pauseTheNextRead()
+        // The watcher reads the file, so the reload runs.
+        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: settingsURL.path)
+        let reading = await readGate.waitUntilTheReadWaits()
+        XCTAssertTrue(reading, "The reload should read the settings file")
+        guard reading else {
+            // The write would wait for ever otherwise.
+            writeGate.resumeTheWrite()
+            return
+        }
+
+        // The change of the rotation lands while the file is read.
+        let newer = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/y.jpg")
+        manager.replace(newer)
+
+        // The write waits for the reload: a reload that publishes the value
+        // it read would make the write persist that one.
+        var published = false
+        let subscription = manager.settingsPublisher.dropFirst().sink { _ in
+            published = true
+            writeGate.resumeTheWrite()
+        }
+        defer { subscription.cancel() }
+        readGate.resumeTheRead()
+
+        // Nothing is published when the change is kept, so the write is
+        // released after a moment.
+        _ = await waitUntil({ published }, timeout: 0.5)
+        writeGate.resumeTheWrite()
+        await manager.waitForPendingWrites()
+
+        XCTAssertEqual(
+            manager.settings.currentWallpaper,
+            "/wallpapers/y.jpg",
+            "The change must stay in memory"
+        )
+        XCTAssertEqual(
+            try decodeSettings(at: settingsURL).currentWallpaper,
+            "/wallpapers/y.jpg",
+            "The change must stay on disk"
+        )
+    }
+
+    /// A file that was changed outside the app is reloaded: the change is
+    /// newer than the settings in memory, and no change landed during the
+    /// read of the file.
+    func testAnExternalEditIsReloadedWhenNoChangeLandsDuringTheRead() async throws {
+        let context = try TestSettingsContext()
+        let readGate = ReadGate()
+        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
+        try encoded(original).write(to: settingsURL)
+        let manager = context.makeSettingsManager(beforeRead: { readGate.beforeRead() })
+        XCTAssertEqual(manager.settings, original)
+
+        // The change lands on the file, outside the app.
+        let external = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/z.jpg")
+        try encoded(external).write(to: settingsURL, options: [.atomic])
+
+        // The reload reads the file, so the change is picked up.
+        readGate.pauseTheNextRead()
+        let reading = await readGate.waitUntilTheReadWaits()
+        XCTAssertTrue(reading, "The reload should read the settings file")
+        readGate.resumeTheRead()
+
+        let reloaded = await waitUntil { manager.settings == external }
+        XCTAssertTrue(reloaded, "The external change should be reloaded")
+        XCTAssertEqual(manager.settings, external)
+    }
+
     private func encoded(_ settings: WallpaperSettings, prettyPrinted: Bool = false) throws -> Data {
         let encoder = JSONEncoder()
         if prettyPrinted {
@@ -922,6 +1017,63 @@ private final class MissingFileCheck: @unchecked Sendable {
 
     /// Lets the reload continue.
     func resumeTheReload() {
+        resume.signal()
+    }
+}
+
+/// Pauses the read of the settings file, so a test can change the settings
+/// while the file is read.
+///
+/// The gate runs off the main actor, so the test can change the settings
+/// while the read waits.
+private final class ReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pausesTheNextRead = false
+    private var isWaiting = false
+    private let resume = DispatchSemaphore(value: 0)
+
+    /// Pauses the next read.
+    func pauseTheNextRead() {
+        lock.lock()
+        pausesTheNextRead = true
+        lock.unlock()
+    }
+
+    /// The seam the settings manager calls before it reads the file.
+    func beforeRead() {
+        lock.lock()
+        let shouldPause = pausesTheNextRead
+        pausesTheNextRead = false
+        isWaiting = shouldPause
+        lock.unlock()
+
+        guard shouldPause else { return }
+        // The test changes the settings and then lets the read continue.
+        resume.wait()
+        lock.lock()
+        isWaiting = false
+        lock.unlock()
+    }
+
+    /// Waits until the read waits at the gate.
+    func waitUntilTheReadWaits(timeout: TimeInterval = 10) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if waitsForTheRead { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
+    }
+
+    /// Tells whether the read waits at the gate.
+    private var waitsForTheRead: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isWaiting
+    }
+
+    /// Lets the waiting read continue.
+    func resumeTheRead() {
         resume.signal()
     }
 }

@@ -75,7 +75,6 @@ final class SettingsManager: ObservableObject {
         settingsSubject.eraseToAnyPublisher()
     }
 
-    var onSettingsChanged: (() -> Void)?
     var onError: ((SettingsManagerError) -> Void)?
 
 
@@ -101,6 +100,11 @@ final class SettingsManager: ObservableObject {
     /// The closure runs on the write queue. It is the seam a test uses to
     /// pause a write, so it can change the settings while the write waits.
     private let beforeWrite: (@Sendable () -> Void)?
+    /// Called before the settings file is read during an external reload.
+    ///
+    /// The closure runs off the main actor. It is the seam a test uses to
+    /// pause the read, so it can change the settings while the file is read.
+    private let beforeRead: (@Sendable () -> Void)?
     private let userDefaults: UserDefaults
     private let configuredDefaultSettingsDirectory: URL
     private let migrateLegacySettings: Bool
@@ -134,7 +138,8 @@ final class SettingsManager: ObservableObject {
         fileExists: (@Sendable (URL) -> Bool)? = nil,
         migrateLegacySettings: Bool = true,
         legacySettingsURL: URL? = SettingsManager.defaultLegacySettingsURL,
-        beforeWrite: (@Sendable () -> Void)? = nil
+        beforeWrite: (@Sendable () -> Void)? = nil,
+        beforeRead: (@Sendable () -> Void)? = nil
     ) {
         self.fileManager = fileManager
         self.fileExists = fileExists ?? { url in FileManager.default.fileExists(atPath: url.path) }
@@ -143,6 +148,7 @@ final class SettingsManager: ObservableObject {
         self.migrateLegacySettings = migrateLegacySettings
         self.legacySettingsURL = legacySettingsURL
         self.beforeWrite = beforeWrite
+        self.beforeRead = beforeRead
         self.currentSettings = SettingsBox(WallpaperSettings())
 
         let storedDirectory = userDefaults
@@ -187,7 +193,6 @@ final class SettingsManager: ObservableObject {
         let normalizedSettings = newSettings.normalized()
         publish(normalizedSettings)
         clearError()
-        onSettingsChanged?()
         enqueueWrite(to: settingsURL)
     }
 
@@ -260,11 +265,13 @@ final class SettingsManager: ObservableObject {
                     // again.
                     let settings = currentSettings
                     let beforeWrite = self.beforeWrite
+                    let fileManager = self.fileManager
                     report(writeQueue.sync {
                         Self.importLegacySettings(
                             settings,
                             from: legacyURL,
                             to: settingsURL,
+                            fileManager: fileManager,
                             beforeWrite: beforeWrite
                         )
                     })
@@ -329,6 +336,7 @@ final class SettingsManager: ObservableObject {
         _ settings: SettingsBox,
         from legacyURL: URL,
         to settingsURL: URL,
+        fileManager: FileManager,
         beforeWrite: (@Sendable () -> Void)?
     ) -> Result<Void, SettingsManagerError> {
         switch performWrite(settings, to: settingsURL, beforeWrite: beforeWrite) {
@@ -342,11 +350,11 @@ final class SettingsManager: ObservableObject {
             .deletingLastPathComponent()
             .appendingPathComponent(legacyURL.lastPathComponent + ".migrated")
         do {
-            if FileManager.default.fileExists(atPath: migratedURL.path) {
+            if fileManager.fileExists(atPath: migratedURL.path) {
                 // An older migrated file is replaced by the one of this import.
-                try? FileManager.default.removeItem(at: migratedURL)
+                try? fileManager.removeItem(at: migratedURL)
             }
-            try FileManager.default.moveItem(at: legacyURL, to: migratedURL)
+            try fileManager.moveItem(at: legacyURL, to: migratedURL)
             return .success(())
         } catch {
             return .failure(.renameFailed(path: legacyURL.path, reason: error.localizedDescription))
@@ -387,7 +395,6 @@ final class SettingsManager: ObservableObject {
 
             clearError()
             startFileWatcher()
-            onSettingsChanged?()
 
             movePreviousSettingsFileAside(from: previousURL)
         } catch let error as SettingsManagerError {
@@ -623,7 +630,8 @@ final class SettingsManager: ObservableObject {
             let outcome = await Self.performExternalChangeIO(
                 url: url,
                 currentSettings: { @MainActor in self.settings },
-                fileExists: self.fileExists
+                fileExists: self.fileExists,
+                beforeRead: self.beforeRead
             )
             guard self.settingsURL == url else { self.startFileWatcher(); return }
             let isCurrent = generation == self.externalChangeGeneration
@@ -649,7 +657,8 @@ final class SettingsManager: ObservableObject {
             let outcome = await Self.performExternalChangeIO(
                 url: url,
                 currentSettings: { @MainActor in self.settings },
-                fileExists: self.fileExists
+                fileExists: self.fileExists,
+                beforeRead: self.beforeRead
             )
             guard self.settingsURL == url, generation == self.externalChangeGeneration else { return }
             self.applyExternalChangeOutcome(outcome)
@@ -668,13 +677,11 @@ final class SettingsManager: ObservableObject {
             // settings in memory, so it must not overwrite them.
             if case .writeFailed? = lastError { break }
             publish(reloaded)
-            onSettingsChanged?()
             clearError()
         case .success(.recreated):
             // The file is written from the settings that are current when the
             // write runs, so a change that lands in the meantime is not lost.
             enqueueWrite(to: settingsURL, createsDirectory: true)
-            onSettingsChanged?()
             clearError()
         case .failure(let error):
             report(error)
@@ -689,13 +696,34 @@ final class SettingsManager: ObservableObject {
     private nonisolated static func performExternalChangeIO(
         url: URL,
         currentSettings: @MainActor @Sendable () async -> WallpaperSettings,
-        fileExists: @Sendable (URL) -> Bool
+        fileExists: @Sendable (URL) -> Bool,
+        beforeRead: (@Sendable () -> Void)?
     ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
         if fileExists(url) {
             do {
+                // The file is not authoritative over the settings in memory:
+                // a change that lands while the file is read is newer than
+                // the snapshot, so the snapshot must not overwrite it. The
+                // settings in memory are read before and after the read of
+                // the file, so the change is noticed.
+                let before = await currentSettings()
+                beforeRead?()
                 let reloaded = try Self.loadSettings(from: url)
-                let current = await currentSettings()
-                return .success(reloaded == current ? .unchanged : .reloaded(reloaded))
+                let after = await currentSettings()
+                if reloaded == before {
+                    // The file still holds the settings we last knew.
+                    return .success(.unchanged)
+                }
+                if after != before {
+                    // A change landed while the file was read: the settings in
+                    // memory are the newer ones, so the file must not
+                    // overwrite them. The queued write persists the change.
+                    return .success(.unchanged)
+                }
+                // The file holds something else and the settings in memory
+                // did not move while it was read, so the file was changed
+                // outside the app.
+                return .success(.reloaded(reloaded))
             } catch let error as SettingsManagerError {
                 return .failure(error)
             } catch {
