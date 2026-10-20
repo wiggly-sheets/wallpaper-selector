@@ -13,7 +13,7 @@
 - [x] Fix appearance theme switching, pin resolution, wallpaper-history updates, and file URL handling.
 - [x] Fix native folder/theme controls and popover hosting/open-window behavior.
 - [x] Set accessory activation policy for menu-bar-only runtime behavior.
-- [x] `swift test` passes: 33 tests.
+- [x] `swift test` passes: 287 tests.
 - [ ] Manual: validate menu-bar popover, hotkeys, folder panel, settings relocation, wallpaper apply, and All Spaces in installed app. Computer Use could not run in this environment because its runtime requested an unavailable elicitation API.
 
 ## Comments

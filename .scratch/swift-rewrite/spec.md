@@ -6,7 +6,7 @@ The user wants to replace the existing Electron/Node.js (Glaze-based) wallpaper 
 
 Create a new Xcode/Swift Package Manager project that contains a single macOS app target configured as an accessory (menu‑bar‑only) application. The app will:
 
-- Store user settings as JSON in `~/Library/Application Support/<bundle-id>/settings.json` (with an option to relocate the file to a custom folder for power users).
+- Store user settings as JSON in `~/Library/Application Support/WallpaperSelector/settings.json` (with an option to relocate the file to a custom folder for power users).
 - Use `NSWorkspace.shared.setDesktopImageURL(_:for:options:)` to set the wallpaper on every attached display. The separate “All Spaces” setting updates macOS’s “Show on all Spaces” control through Accessibility, with a clear manual fallback when permission or the control is unavailable.
 - Manage a rotation timer with `DispatchSourceTimer` (or `Timer` + `RunLoop`) that dispatches async work to avoid blocking the timer thread.
 - Provide a dynamic menu bar extra built from SwiftUI/AppKit that reflects folders, themes, rotation controls, “All Spaces” toggle, “Match Appearance” switch, and Settings.
@@ -42,7 +42,7 @@ Create a new Xcode/Swift Package Manager project that contains a single macOS ap
 - The `wallpaper-img://` custom protocol used by the Electron version is unnecessary because SwiftUI/AppKit can load local file URLs directly.
 - All asynchronous work (e.g., reading image directories) will be performed off the main timer thread to keep the UI responsive.
 - The settings file will be watched for external changes (using a `DispatchSourceFileSystemObject`) so that manual edits are reflected immediately.
-- Upon first launch, if a settings file is detected in the legacy Electron location, it will be copied to the new location (Application Support) and a migration notice logged.
+- Upon first launch, if a settings file is detected in the legacy Electron location, it will be imported into the new location (Application Support). The legacy file is renamed to `settings.json.migrated`, so its bytes survive, and the notice is shown on the General pane of the Settings window.
 
 ## Tickets
 
