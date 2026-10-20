@@ -75,7 +75,7 @@ final class MenuBarController: NSObject {
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: nil)
         }
-        statusItem?.menu = menu
+        statusItem?.menu = menu.menu
         updateMenu()
     }
 

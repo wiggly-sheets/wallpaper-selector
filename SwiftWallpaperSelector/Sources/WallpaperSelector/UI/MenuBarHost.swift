@@ -17,8 +17,10 @@ final class MenuBarHostingViewController: NSViewController {
         super.init(nibName: nil, bundle: nil)
     }
 
+    // The initializer is not failable, so it builds against a superclass
+    // initializer that is failable and against one that is not.
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
+    required init(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 

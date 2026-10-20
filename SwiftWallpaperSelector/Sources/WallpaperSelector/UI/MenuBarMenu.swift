@@ -83,8 +83,15 @@ struct MenuBarMenuActions {
 /// menu that is already open keeps the object it was opened with, so a new
 /// state changes the items of the menu that is on the screen instead of
 /// putting a new menu on the status item.
+///
+/// The class owns an `NSMenu` instead of being one. A subclass of `NSMenu`
+/// has to implement `init(coder:)`, and whether that initializer is failable
+/// depends on the SDK, so the code would only build on some of them.
 @MainActor
-final class MenuBarMenu: NSMenu {
+final class MenuBarMenu: NSObject {
+
+    /// The menu the status item shows.
+    let menu: NSMenu
 
     /// The actions the items run. The controller fills them in.
     var actions = MenuBarMenuActions()
@@ -117,20 +124,16 @@ final class MenuBarMenu: NSMenu {
     private var themeItems: [String: NSMenuItem] = [:]
     private var recentItems: [String: NSMenuItem] = [:]
 
-    override init(title: String) {
-        super.init(title: title)
+    init(title: String) {
+        menu = NSMenu(title: title)
+        super.init()
         // The items set `isEnabled` by hand: AppKit must not enable the
         // items again.
-        autoenablesItems = false
+        menu.autoenablesItems = false
         recentMenu.autoenablesItems = false
         rotateMenu.autoenablesItems = false
         themeMenu.autoenablesItems = false
         buildItems()
-    }
-
-    @available(*, unavailable)
-    required init(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
     }
 
     /// Updates the items of the menu in place.
@@ -162,90 +165,90 @@ final class MenuBarMenu: NSMenu {
             item.isEnabled = false
             item.isHidden = true
             errorItems.append(item)
-            addItem(item)
+            menu.addItem(item)
         }
         errorSeparator.isHidden = true
-        addItem(errorSeparator)
+        menu.addItem(errorSeparator)
 
         statusItem.isEnabled = false
-        addItem(statusItem)
+        menu.addItem(statusItem)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         openMainItem.target = self
         openMainItem.action = #selector(runAction(_:))
         openMainItem.representedObject = MenuBarMenuAction.showMainWindow
         openMainItem.image = symbol("photo.on.rectangle.angled")
-        addItem(openMainItem)
+        menu.addItem(openMainItem)
 
         previewItem.target = self
         previewItem.action = #selector(runAction(_:))
         previewItem.representedObject = MenuBarMenuAction.showPreview
         previewItem.image = symbol("eye")
-        addItem(previewItem)
+        menu.addItem(previewItem)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         rotationItem.target = self
         rotationItem.action = #selector(runAction(_:))
         rotationItem.representedObject = MenuBarMenuAction.toggleRotation
-        addItem(rotationItem)
+        menu.addItem(rotationItem)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         addActionItem(shuffleItem, action: .shuffle)
         addActionItem(nextItem, action: .next)
         addActionItem(previousItem, action: .previous)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         recentItem.submenu = recentMenu
         recentItem.image = symbol("clock.arrow.circlepath")
         recentItem.isEnabled = true
         recentItem.isHidden = true
-        addItem(recentItem)
+        menu.addItem(recentItem)
         recentSeparator.isHidden = true
-        addItem(recentSeparator)
+        menu.addItem(recentSeparator)
 
         rotateItem.submenu = rotateMenu
         rotateItem.image = symbol("arrow.triangle.2.circlepath")
         rotateItem.isEnabled = true
-        addItem(rotateItem)
+        menu.addItem(rotateItem)
 
         themeItem.submenu = themeMenu
         themeItem.image = symbol("paintpalette")
         themeItem.isEnabled = true
-        addItem(themeItem)
+        menu.addItem(themeItem)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         allSpacesItem.target = self
         allSpacesItem.action = #selector(runAction(_:))
         allSpacesItem.representedObject = MenuBarMenuAction.toggleAllSpaces
         allSpacesItem.image = symbol("rectangle.stack")
-        addItem(allSpacesItem)
+        menu.addItem(allSpacesItem)
 
         appearanceItem.target = self
         appearanceItem.action = #selector(runAction(_:))
         appearanceItem.representedObject = MenuBarMenuAction.toggleMatchAppearance
         appearanceItem.image = symbol("circle.lefthalf.filled")
-        addItem(appearanceItem)
+        menu.addItem(appearanceItem)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         settingsItem.target = self
         settingsItem.action = #selector(runAction(_:))
         settingsItem.representedObject = MenuBarMenuAction.openSettings
         settingsItem.image = symbol("gearshape")
-        addItem(settingsItem)
+        menu.addItem(settingsItem)
 
-        addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem.separator())
 
         quitItem.target = self
         quitItem.action = #selector(runAction(_:))
         quitItem.representedObject = MenuBarMenuAction.quit
         quitItem.image = symbol("power", colored: .systemRed)
-        addItem(quitItem)
+        menu.addItem(quitItem)
 
         buildRotateSubmenu()
         buildThemeSubmenu()
@@ -255,7 +258,7 @@ final class MenuBarMenu: NSMenu {
         item.target = self
         item.action = #selector(runAction(_:))
         item.representedObject = action
-        addItem(item)
+        menu.addItem(item)
     }
 
     private func buildRotateSubmenu() {
@@ -315,7 +318,7 @@ final class MenuBarMenu: NSMenu {
             let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
             item.isEnabled = false
             // The new item comes before the separator that closes the block.
-            insertItem(item, at: errorItems.count)
+            menu.insertItem(item, at: errorItems.count)
             errorItems.append(item)
         }
         for (index, item) in errorItems.enumerated() {
@@ -409,13 +412,13 @@ final class MenuBarMenu: NSMenu {
 
     /// Puts the item at the given index. The item keeps its identity, so a
     /// click on an open menu always runs the current action.
-    private func move(_ item: NSMenuItem, to index: Int, in menu: NSMenu) {
-        let current = menu.index(of: item)
+    private func move(_ item: NSMenuItem, to index: Int, in submenu: NSMenu) {
+        let current = submenu.index(of: item)
         guard current != index else { return }
         if current != -1 {
-            menu.removeItem(item)
+            submenu.removeItem(item)
         }
-        menu.insertItem(item, at: min(index, menu.numberOfItems))
+        submenu.insertItem(item, at: min(index, submenu.numberOfItems))
     }
 
     // MARK: - The actions

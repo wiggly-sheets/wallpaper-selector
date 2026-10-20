@@ -15,17 +15,17 @@ final class MenuBarMenuEnablementTests: XCTestCase {
             errorMessages: ["The wallpaper could not be set."]
         ))
 
-        XCTAssertEqual(menu.item(titled: "The wallpaper could not be set.")?.isEnabled, false)
+        XCTAssertEqual(menu.menu.item(titled: "The wallpaper could not be set.")?.isEnabled, false)
     }
 
     /// The preview needs at least one folder.
     func testThePreviewItemIsDisabledWithoutFolders() {
         let menu = MenuBarMenu(title: "Wallpaper Selector")
         menu.update(with: MenuBarMenuState(isPreviewEnabled: false))
-        XCTAssertEqual(menu.item(titled: "Preview Wallpapers")?.isEnabled, false)
+        XCTAssertEqual(menu.menu.item(titled: "Preview Wallpapers")?.isEnabled, false)
 
         menu.update(with: MenuBarMenuState(isPreviewEnabled: true))
-        XCTAssertEqual(menu.item(titled: "Preview Wallpapers")?.isEnabled, true)
+        XCTAssertEqual(menu.menu.item(titled: "Preview Wallpapers")?.isEnabled, true)
     }
 
     /// The rotation cannot run while the appearance is matched, so the
@@ -38,8 +38,8 @@ final class MenuBarMenuEnablementTests: XCTestCase {
             rotationAction: .shuffle
         ))
 
-        XCTAssertEqual(menu.item(titled: "Start Rotation")?.isEnabled, false)
-        let rotateSubmenu = menu.item(titled: "Rotate")?.submenu
+        XCTAssertEqual(menu.menu.item(titled: "Start Rotation")?.isEnabled, false)
+        let rotateSubmenu = menu.menu.item(titled: "Rotate")?.submenu
         XCTAssertEqual(rotateSubmenu?.item(titled: "Every Hour")?.isEnabled, false)
         XCTAssertEqual(rotateSubmenu?.item(titled: "Shuffle Wallpaper")?.isEnabled, false)
         XCTAssertEqual(rotateSubmenu?.item(titled: "On Interval:")?.isEnabled, false)
@@ -50,7 +50,7 @@ final class MenuBarMenuEnablementTests: XCTestCase {
         let menu = MenuBarMenu(title: "Wallpaper Selector")
         menu.update(with: MenuBarMenuState(intervalMinutes: .daily))
 
-        let rotateSubmenu = menu.item(titled: "Rotate")?.submenu
+        let rotateSubmenu = menu.menu.item(titled: "Rotate")?.submenu
         XCTAssertEqual(rotateSubmenu?.item(titled: "Daily")?.state, .on)
         XCTAssertEqual(rotateSubmenu?.item(titled: "Off")?.state, .off)
     }
@@ -60,7 +60,7 @@ final class MenuBarMenuEnablementTests: XCTestCase {
         let menu = MenuBarMenu(title: "Wallpaper Selector")
         menu.update(with: MenuBarMenuState())
 
-        let rotateSubmenu = menu.item(titled: "Rotate")?.submenu
+        let rotateSubmenu = menu.menu.item(titled: "Rotate")?.submenu
         XCTAssertEqual(rotateSubmenu?.item(titled: "Shuffle Theme")?.isEnabled, false)
         XCTAssertEqual(rotateSubmenu?.item(titled: "Next Theme")?.isEnabled, false)
         XCTAssertEqual(rotateSubmenu?.item(titled: "Previous Theme")?.isEnabled, false)
@@ -79,7 +79,7 @@ final class MenuBarMenuEnablementTests: XCTestCase {
             )
         ]))
 
-        let submenu = menu.item(titled: "Recent Wallpapers")?.submenu
+        let submenu = menu.menu.item(titled: "Recent Wallpapers")?.submenu
         XCTAssertEqual(submenu?.item(titled: "gone.png")?.isEnabled, false)
     }
 
@@ -98,8 +98,8 @@ final class MenuBarMenuEnablementTests: XCTestCase {
             ]
         ))
 
-        XCTAssertEqual(menu.item(titled: "Rotate")?.isEnabled, true)
-        XCTAssertEqual(menu.item(titled: "Theme")?.isEnabled, true)
-        XCTAssertEqual(menu.item(titled: "Recent Wallpapers")?.isEnabled, true)
+        XCTAssertEqual(menu.menu.item(titled: "Rotate")?.isEnabled, true)
+        XCTAssertEqual(menu.menu.item(titled: "Theme")?.isEnabled, true)
+        XCTAssertEqual(menu.menu.item(titled: "Recent Wallpapers")?.isEnabled, true)
     }
 }

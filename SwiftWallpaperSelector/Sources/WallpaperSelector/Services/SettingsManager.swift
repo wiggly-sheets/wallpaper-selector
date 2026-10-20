@@ -610,6 +610,7 @@ final class SettingsManager: ObservableObject {
 
     private func handleExternalChange() {
         pendingExternalChangeTask = nil
+        // shortcut: the watcher is stopped while the reload reads the file, a write in that window is only caught by the modification-date re-read, upgrade when the watcher can stay live during the read
         stopFileWatcher()
 
         let url = settingsURL
