@@ -28,3 +28,19 @@ jobs:
         run: |
           brew install create-dmg
           make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
+      # The `hdiutil convert` branch of the DMG recipe only runs when
+      # CREATE_DMG_FINALIZE_FLAGS is not empty. The step above passes an
+      # empty value on purpose, so the branch would never run in CI.
+      # This step runs the recipe with the default flags, so the branch runs.
+      # The version and the build number are different from the step above,
+      # so the two steps cannot write the same artifact names.
+      # The step is NOT a gate: it is a signal that the conversion still
+      # works, so a failure must never turn CI red.
+      - name: Build release artifacts with the default finalize flags
+        continue-on-error: true
+        env:
+          VERSION: 0.0.0-ci-convert
+          BUILD_NUMBER: 1
+        run: |
+          brew install create-dmg
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER"
