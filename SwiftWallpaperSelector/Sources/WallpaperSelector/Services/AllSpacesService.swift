@@ -46,6 +46,8 @@ final class AllSpacesService {
     private let requestAccessibilityPermission: @MainActor () -> Void
     private let automation: Automation
     private let automationQueue: DispatchQueue
+    private let systemSettingsWaitAttempts: Int
+    private let systemSettingsWaitInterval: TimeInterval
 
     private var pendingRequests: [Request] = []
     private var isProcessing = false
@@ -72,7 +74,9 @@ final class AllSpacesService {
         automationQueue: DispatchQueue = DispatchQueue(
             label: "com.wallpaper-selector.all-spaces",
             qos: .userInitiated
-        )
+        ),
+        systemSettingsWaitAttempts: Int = 40,
+        systemSettingsWaitInterval: TimeInterval = 0.25
     ) {
         self.wallpaperSettingsURL = wallpaperSettingsURL
         self.openWallpaperSettings = openWallpaperSettings
@@ -81,6 +85,8 @@ final class AllSpacesService {
         self.requestAccessibilityPermission = requestAccessibilityPermission
         self.automation = automation
         self.automationQueue = automationQueue
+        self.systemSettingsWaitAttempts = systemSettingsWaitAttempts
+        self.systemSettingsWaitInterval = systemSettingsWaitInterval
     }
 
     /// Enqueues an ordered request. The completion and `onResult` are always
@@ -132,19 +138,20 @@ final class AllSpacesService {
             let automationQueue = self.automationQueue
             automationQueue.async { [weak self] in
                 let result = automation(processIdentifier, enabled)
+                guard let self else { return }
                 Task { @MainActor in
-                    self?.finishCurrentRequest(with: Self.applicationResult(from: result, enabled: enabled))
+                    self.finishCurrentRequest(with: Self.applicationResult(from: result, enabled: enabled))
                 }
             }
         }
     }
 
     private func waitForSystemSettingsProcess() async -> pid_t? {
-        for _ in 0..<40 {
+        for _ in 0..<systemSettingsWaitAttempts {
             if let processIdentifier = systemSettingsProcessIdentifier() {
                 return processIdentifier
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(systemSettingsWaitInterval * 1_000_000_000))
         }
         return nil
     }

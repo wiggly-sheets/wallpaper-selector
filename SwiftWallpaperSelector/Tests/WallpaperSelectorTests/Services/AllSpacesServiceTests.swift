@@ -48,6 +48,75 @@ final class AllSpacesServiceTests: XCTestCase {
     }
 
     @MainActor
+    func testCouldNotOpenWallpaperSettingsReportsManualFallback() {
+        var result: AllSpacesApplicationResult?
+        var reported: AllSpacesApplicationResult?
+        let didAutomate = LockedBox(false)
+        let service = AllSpacesService(
+            openWallpaperSettings: { _ in false },
+            systemSettingsProcessIdentifier: { 42 },
+            isAccessibilityTrusted: { true },
+            requestAccessibilityPermission: {},
+            automation: { _, _ in
+                didAutomate.withValue { $0 = true }
+                return .applied
+            }
+        )
+        service.onResult = { reported = $0 }
+
+        service.setEnabled(true) { result = $0 }
+
+        XCTAssertEqual(
+            result,
+            .manualActionRequired(enabled: true, reason: .couldNotOpenWallpaperSettings)
+        )
+        XCTAssertEqual(
+            reported,
+            .manualActionRequired(enabled: true, reason: .couldNotOpenWallpaperSettings)
+        )
+        XCTAssertFalse(didAutomate.value)
+    }
+
+    @MainActor
+    func testMissingSystemSettingsProcessReportsManualFallback() async {
+        // The service waits for System Settings to show up: the wait is
+        // shortened, so the test stays fast.
+        let completed = expectation(description: "manual fallback reported")
+        var result: AllSpacesApplicationResult?
+        var reported: AllSpacesApplicationResult?
+        let didAutomate = LockedBox(false)
+        let service = AllSpacesService(
+            openWallpaperSettings: { _ in true },
+            systemSettingsProcessIdentifier: { nil },
+            isAccessibilityTrusted: { true },
+            requestAccessibilityPermission: {},
+            automation: { _, _ in
+                didAutomate.withValue { $0 = true }
+                return .applied
+            },
+            systemSettingsWaitAttempts: 1,
+            systemSettingsWaitInterval: 0
+        )
+        service.onResult = { result in
+            reported = result
+            completed.fulfill()
+        }
+
+        service.setEnabled(true) { result = $0 }
+
+        await fulfillment(of: [completed], timeout: 30)
+        XCTAssertEqual(
+            result,
+            .manualActionRequired(enabled: true, reason: .systemSettingsUnavailable)
+        )
+        XCTAssertEqual(
+            reported,
+            .manualActionRequired(enabled: true, reason: .systemSettingsUnavailable)
+        )
+        XCTAssertFalse(didAutomate.value)
+    }
+
+    @MainActor
     func testRapidRequestsAreAutomatedAndCompletedInOrder() async {
         let completed = expectation(description: "all requests completed")
         completed.expectedFulfillmentCount = 3
