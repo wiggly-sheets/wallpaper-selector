@@ -5,18 +5,23 @@ struct TrayPopoverView: View {
     @EnvironmentObject var viewModel: TrayPopoverViewModel
 
     var body: some View {
-        VStack(spacing: 10) {
-            headerView
-            themeSelector
-            shuffleControls
-            gridView
-            Divider()
-            autoRotateSection
-            allSpacesSection
-            errorCaption
+        // The body scrolls, so a popover that is clamped to a short
+        // display can still reach every control. The height of the popover
+        // is the height of the content.
+        ScrollView {
+            VStack(spacing: 10) {
+                headerView
+                themeSelector
+                shuffleControls
+                gridView
+                Divider()
+                autoRotateSection
+                allSpacesSection
+                errorCaption
+            }
+            .padding(8)
         }
-        .padding(8)
-        .frame(width: 300, height: 528)
+        .frame(width: 300)
     }
 
 
@@ -101,6 +106,8 @@ struct TrayPopoverView: View {
 
 
     private var gridView: some View {
+        // The grid scrolls in its own area, so a long list of wallpapers
+        // does not make the popover taller than it has to be.
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), spacing: 8)], spacing: 8) {
                 ForEach(viewModel.images, id: \.self) { url in
@@ -120,7 +127,7 @@ struct TrayPopoverView: View {
             }
             .padding(8)
         }
-        .frame(maxHeight: .infinity)
+        .frame(maxHeight: 280)
     }
 
 
@@ -220,6 +227,6 @@ struct TrayPopoverView_Previews: PreviewProvider {
 
         return TrayPopoverView()
             .environmentObject(TrayPopoverViewModel(appState: appState))
-            .frame(width: 300, height: 528)
+            .frame(width: 300)
     }
 }

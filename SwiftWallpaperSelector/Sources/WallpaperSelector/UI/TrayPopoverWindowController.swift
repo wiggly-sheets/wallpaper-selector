@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 extension Notification.Name {
     static let OpenMainWindowRequested = Notification.Name("OpenMainWindowRequested")
@@ -15,11 +16,16 @@ final class PopoverWindow: NSWindow {
 
 @MainActor
 final class TrayPopoverWindowController: NSWindowController {
+    /// The width of the popover. The height follows the content.
+    static let popoverWidth: CGFloat = 300
+
     private var statusItem: NSStatusItem?
 
     private var viewModel: TrayPopoverViewModel?
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
+    private let hostingView: NSHostingView<AnyView>
+    private var cancellables = Set<AnyCancellable>()
 
 
     convenience init(
@@ -28,14 +34,16 @@ final class TrayPopoverWindowController: NSWindowController {
     ) {
         let viewModel = TrayPopoverViewModel(appState: appState)
         let view = TrayPopoverView().environmentObject(viewModel)
-        let hostingView = NSHostingView(rootView: view)
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        let hostingView = NSHostingView(rootView: AnyView(view))
+        // The hosting view follows the window, so the content is laid out
+        // in the size of the window.
+        hostingView.autoresizingMask = [.width, .height]
         let materialView = NSVisualEffectView()
         materialView.material = .popover
         materialView.blendingMode = .behindWindow
         materialView.state = .active
         let window = PopoverWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 528),
+            contentRect: NSRect(x: 0, y: 0, width: Self.popoverWidth, height: 1),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -51,16 +59,11 @@ final class TrayPopoverWindowController: NSWindowController {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
 
-        self.init(window: window)
+        self.init(window: window, hostingView: hostingView)
         self.statusItem = statusItem
         self.viewModel = viewModel
         materialView.addSubview(hostingView)
-        NSLayoutConstraint.activate([
-            hostingView.leadingAnchor.constraint(equalTo: materialView.leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: materialView.trailingAnchor),
-            hostingView.topAnchor.constraint(equalTo: materialView.topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: materialView.bottomAnchor)
-        ])
+        hostingView.frame = materialView.bounds
         viewModel.onShowMainWindow = { [weak self] in
             self?.hide()
             NotificationCenter.default.post(name: .OpenMainWindowRequested, object: nil)
@@ -72,6 +75,17 @@ final class TrayPopoverWindowController: NSWindowController {
             name: NSWindow.didResignKeyNotification,
             object: window
         )
+        observeContentChanges()
+    }
+
+    private init(window: NSWindow, hostingView: NSHostingView<AnyView>) {
+        self.hostingView = hostingView
+        super.init(window: window)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 
     deinit {
@@ -86,13 +100,40 @@ final class TrayPopoverWindowController: NSWindowController {
 
 
     override func showWindow(_ sender: Any?) {
-        let width = 300.0
-        let height = 528.0
         let screen = statusItem?.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let screenFrame = screen?.visibleFrame else { return }
 
-        // The vertical anchor comes from the screen: the status item window
-        // frame is stale when displays of different heights are connected.
+        // The frame is set before the window is ordered in, so the popover
+        // does not flash in the corner of the screen.
+        layout(in: screenFrame)
+
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        installOutsideClickMonitors()
+    }
+
+    /// The height the SwiftUI content needs.
+    ///
+    /// The content decides how tall the popover is, so a longer list of
+    /// wallpapers makes it taller and a shorter one makes it shorter.
+    func contentHeight() -> CGFloat {
+        hostingView.layoutSubtreeIfNeeded()
+        return max(hostingView.fittingSize.height, 1)
+    }
+
+    /// The height of the popover: the height of its content, capped by the
+    /// visible frame of the display.
+    static func height(forContentHeight contentHeight: CGFloat, in screenFrame: CGRect) -> CGFloat {
+        min(contentHeight, screenFrame.height)
+    }
+
+    /// Sizes the window to its content and places it inside the visible
+    /// frame of the display.
+    func layout(in screenFrame: CGRect) {
+        let width = Self.popoverWidth
+        let height = Self.height(forContentHeight: contentHeight(), in: screenFrame)
+        window?.setContentSize(NSSize(width: width, height: height))
+
         let origin: CGPoint
         if let button = statusItem?.button, let buttonWindow = button.window {
             // The status item window covers the whole display, so the icon
@@ -107,20 +148,14 @@ final class TrayPopoverWindowController: NSWindowController {
         } else {
             origin = CGPoint(x: screenFrame.maxX - width, y: screenFrame.maxY - height)
         }
-
-        let clamped = Self.clampedOrigin(
-            origin,
-            in: screenFrame,
-            width: width,
-            height: height
+        window?.setFrameOrigin(
+            Self.clampedOrigin(
+                origin,
+                in: screenFrame,
+                width: width,
+                height: height
+            )
         )
-        // The frame is set before the window is ordered in, so the popover
-        // does not flash in the corner of the screen.
-        window?.setFrameOrigin(clamped)
-
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        installOutsideClickMonitors()
     }
 
 
@@ -152,7 +187,6 @@ final class TrayPopoverWindowController: NSWindowController {
         width: CGFloat,
         height: CGFloat
     ) -> CGPoint {
-        // shortcut: the height of the popover is fixed at 528 pt, upgrade when a display shorter than the popover has to be supported
         let clampedX = min(max(origin.x, screenFrame.minX), max(screenFrame.minX, screenFrame.maxX - width))
         let clampedY = min(max(origin.y, screenFrame.minY), max(screenFrame.minY, screenFrame.maxY - height))
         return CGPoint(x: clampedX, y: clampedY)
@@ -161,6 +195,26 @@ final class TrayPopoverWindowController: NSWindowController {
     @objc private func windowDidResignKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === self.window else { return }
         hide()
+    }
+
+    /// The content of the popover changed, so the window takes the new
+    /// height of the content.
+    private func observeContentChanges() {
+        viewModel?.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                // The content is laid out after the change, so the height is
+                // measured in the next turn of the main queue.
+                DispatchQueue.main.async { [weak self] in self?.resizeToContent() }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func resizeToContent() {
+        guard let window, window.isVisible else { return }
+        let screen = statusItem?.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screenFrame = screen?.visibleFrame else { return }
+        layout(in: screenFrame)
     }
 
     private func installOutsideClickMonitors() {
