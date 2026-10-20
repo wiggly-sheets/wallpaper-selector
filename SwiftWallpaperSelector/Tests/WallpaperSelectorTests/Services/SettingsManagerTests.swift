@@ -550,6 +550,104 @@ final class SettingsManagerTests: XCTestCase {
         )
     }
 
+    /// A legacy file that could not be read is not renamed: the import is
+    /// still pending, so the next launch can retry it.
+    func testAnUnreadableLegacyFileIsNotRenamed() throws {
+        let context = try TestSettingsContext()
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("not-json".utf8).write(to: legacyURL)
+
+        let manager = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyURL.path),
+            "The legacy file must stay, so the migration can be retried"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
+            "A file that was not imported must not be renamed"
+        )
+    }
+
+    /// A successful import renames the legacy file: the import is done, and
+    /// the bytes of the legacy file survive.
+    func testASuccessfulImportRenamesTheLegacyFile() throws {
+        let context = try TestSettingsContext()
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacyData = try encoded(WallpaperSettings(folderPaths: ["/legacy"]))
+        try legacyData.write(to: legacyURL)
+
+        let manager = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+
+        XCTAssertEqual(manager.settings.folderPaths, ["/legacy"])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: legacyURL.path),
+            "The imported legacy file must be renamed"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: migratedLegacyURL(for: legacyURL)),
+            legacyData,
+            "The bytes of the legacy file have to survive the rename"
+        )
+    }
+
+    /// A legacy file that survives a user save is reported on the next
+    /// launch: it was never imported, because a newer settings file exists.
+    func testALegacyFileThatSurvivesASaveIsReportedOnTheNextLaunch() throws {
+        let context = try TestSettingsContext()
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let legacyData = Data("not-json".utf8)
+        try legacyData.write(to: legacyURL)
+
+        // The first launch cannot read the legacy file, so the location stays
+        // empty and the migration stays pending.
+        let firstLaunch = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+        guard case .decodeFailed? = firstLaunch.lastError else {
+            return XCTFail("Expected the unreadable legacy file to be reported")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: firstLaunch.settingsURL.path))
+
+        // The first user change writes the settings file.
+        firstLaunch.replace(WallpaperSettings(folderPaths: ["/after-save"]))
+        firstLaunch.flushPendingWrites()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: firstLaunch.settingsURL.path))
+
+        // The next launch finds the legacy file next to a newer settings file.
+        let secondLaunch = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+        guard case .legacySettingsNotImported? = secondLaunch.lastError else {
+            return XCTFail("Expected the legacy file to be reported")
+        }
+        XCTAssertEqual(
+            secondLaunch.settings.folderPaths,
+            ["/after-save"],
+            "The legacy file must not be imported over the newer settings"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: legacyURL),
+            legacyData,
+            "The legacy file must not be touched"
+        )
+    }
+
+    /// The path the imported legacy file is renamed to.
+    private func migratedLegacyURL(for legacyURL: URL) -> URL {
+        legacyURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(legacyURL.lastPathComponent + ".migrated")
+    }
+
     /// The watcher cannot watch a file that does not exist: the first save
     /// has to start it, or every later external change is ignored.
     func testTheWatcherStartsAfterTheFirstSave() async throws {

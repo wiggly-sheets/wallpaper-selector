@@ -226,6 +226,15 @@ final class SettingsManager: ObservableObject {
                 legacyURL = candidate
             }
 
+            if legacyURL != nil, fileExists(settingsURL) {
+                // A newer settings file exists: the legacy file is never
+                // imported over it. The file stays, so the user can import it
+                // by hand, and the message stays visible.
+                let notice = SettingsManagerError.legacySettingsNotImported(path: legacyURL!.path)
+                legacySettingsNotice = notice
+                report(notice)
+            }
+
             if fileExists(settingsURL) {
                 do {
                     publish(try Self.loadSettings(from: settingsURL))
@@ -254,6 +263,7 @@ final class SettingsManager: ObservableObject {
                     report(writeQueue.sync {
                         Self.importLegacySettings(
                             settings,
+                            from: legacyURL,
                             to: settingsURL,
                             beforeWrite: beforeWrite
                         )
@@ -317,6 +327,7 @@ final class SettingsManager: ObservableObject {
     /// again.
     nonisolated private static func importLegacySettings(
         _ settings: SettingsBox,
+        from legacyURL: URL,
         to settingsURL: URL,
         beforeWrite: (@Sendable () -> Void)?
     ) -> Result<Void, SettingsManagerError> {
@@ -327,7 +338,19 @@ final class SettingsManager: ObservableObject {
             return .failure(error)
         }
 
-        return .success(())
+        let migratedURL = legacyURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(legacyURL.lastPathComponent + ".migrated")
+        do {
+            if FileManager.default.fileExists(atPath: migratedURL.path) {
+                // An older migrated file is replaced by the one of this import.
+                try? FileManager.default.removeItem(at: migratedURL)
+            }
+            try FileManager.default.moveItem(at: legacyURL, to: migratedURL)
+            return .success(())
+        } catch {
+            return .failure(.renameFailed(path: legacyURL.path, reason: error.localizedDescription))
+        }
     }
 
     private func switchSettingsLocation(to directory: URL, customDirectoryPath: String?) throws {
