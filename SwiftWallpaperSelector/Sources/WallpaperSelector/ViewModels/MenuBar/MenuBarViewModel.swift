@@ -15,21 +15,54 @@ final class MenuBarViewModel: ObservableObject {
     @Published private(set) var rotationAction: RotationAction = .shuffle
     @Published private(set) var allSpaces = false
     @Published private(set) var matchSystemAppearance = false
+    @Published private(set) var lastWallpaperError: String?
+    @Published private(set) var hotKeyErrorMessage: String?
 
     private let appState: AppState
     private var cancellables = Set<AnyCancellable>()
 
-    init(appState: AppState) {
+    init(appState: AppState, settingsViewModel: SettingsViewModel) {
         self.appState = appState
 
-        appState.$settings
-            .sink { [weak self] _ in self?.refreshUIState() }
+        appState.settingsPublisher
+            .sink { [weak self] settings in self?.refreshUIState(settings) }
             .store(in: &cancellables)
         appState.$isRotationRunning
             .sink { [weak self] isRunning in self?.isRotationActive = isRunning }
             .store(in: &cancellables)
+        appState.$lastWallpaperError
+            .sink { [weak self] error in self?.lastWallpaperError = error }
+            .store(in: &cancellables)
+        settingsViewModel.$hotKeyErrorMessage
+            .sink { [weak self] message in self?.hotKeyErrorMessage = message }
+            .store(in: &cancellables)
 
-        refreshUIState()
+        refreshUIState(appState.settings)
+    }
+
+    /// The failures the menu bar has to show: the last wallpaper failure and
+    /// the hot-key registration failure.
+    var errorMessages: [String] {
+        [lastWallpaperError, hotKeyErrorMessage].compactMap { $0 }
+    }
+
+    /// The rotation cannot run while the appearance is matched, so the menu
+    /// item would do nothing. The name states the effect, so a view binds it
+    /// without negating it.
+    var isRotationControlDisabled: Bool {
+        matchSystemAppearance
+    }
+
+    /// The wallpapers of the recent menu. The history is already bounded by
+    /// the limit of the settings, so every entry is shown.
+    var displayedRecentWallpapers: [String] {
+        recentWallpapers
+    }
+
+    /// A wallpaper whose file is gone cannot be applied, so its menu item is
+    /// disabled.
+    func canApplyRecentWallpaper(_ path: String) -> Bool {
+        FileManager.default.fileExists(atPath: path)
     }
 
     func shuffle() {
@@ -84,8 +117,7 @@ final class MenuBarViewModel: ObservableObject {
         theme.displayName
     }
 
-    private func refreshUIState() {
-        let settings = appState.settings
+    private func refreshUIState(_ settings: WallpaperSettings) {
         selectedThemeID = settings.activeThemeID
         themes = settings.themes
         recentWallpapers = settings.wallpaperHistory

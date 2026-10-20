@@ -18,4 +18,12 @@ public enum RotationAction: String, Codable, Equatable, CaseIterable, Sendable {
         case .themePrevious: return "Previous Theme"
         }
     }
+
+    /// The actions that need at least one theme.
+    public var isThemeAction: Bool {
+        switch self {
+        case .themeShuffle, .themeNext, .themePrevious: return true
+        case .shuffle, .next, .previous: return false
+        }
+    }
 }

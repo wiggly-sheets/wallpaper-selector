@@ -35,11 +35,36 @@ final class SettingsManager: ObservableObject {
     nonisolated static let bundleID = "com.wallpaper-selector.macos"
     nonisolated static let customDirectoryDefaultsKey = "WallpaperSelector.settingsDirectory"
 
+    /// The settings file of the Electron version the app replaces.
+    nonisolated static let defaultLegacySettingsURL: URL? = {
+        guard let home = FileManager.default.urls(for: .userDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return home.appendingPathComponent(".wallpaper-selector/settings.json")
+    }()
+
     private(set) var settingsDirectory: URL
     private(set) var settingsURL: URL
 
-    @Published private(set) var settings: WallpaperSettings = .init()
     @Published private(set) var lastError: SettingsManagerError?
+
+    /// Holds the current settings.
+    ///
+    /// A subject is used instead of `@Published` because `@Published` publishes
+    /// in `willSet`: subscribers would receive the new value while the
+    /// `settings` property still holds the old one.
+    private let settingsSubject = CurrentValueSubject<WallpaperSettings, Never>(WallpaperSettings())
+
+    /// The current settings.
+    var settings: WallpaperSettings {
+        settingsSubject.value
+    }
+
+    /// Publishes every settings change. The new value is stored before it is
+    /// published, so `settings` already holds it while subscribers run.
+    var settingsPublisher: AnyPublisher<WallpaperSettings, Never> {
+        settingsSubject.eraseToAnyPublisher()
+    }
 
     var onSettingsChanged: (() -> Void)?
     var onError: ((SettingsManagerError) -> Void)?
@@ -52,9 +77,23 @@ final class SettingsManager: ObservableObject {
     private let userDefaults: UserDefaults
     private let configuredDefaultSettingsDirectory: URL
     private let migrateLegacySettings: Bool
+    private let legacySettingsURL: URL?
+
+    /// Counts the external reloads. A reload that finishes after a newer one
+    /// started is stale and must not overwrite the newer settings.
+    private(set) var externalChangeGeneration: UInt = 0
+
+    /// The legacy settings file exists but could not be read. The migration
+    /// is still pending, so the legacy file stays on disk and the reason for
+    /// the default settings is kept visible.
+    private var legacyMigrationError: SettingsManagerError?
+
+    var isLegacyMigrationPending: Bool {
+        legacyMigrationError != nil
+    }
 
 
-    private enum ExternalChangeOutcome {
+    private enum ExternalChangeOutcome: Sendable {
         case unchanged
         case reloaded(WallpaperSettings)
         case recreated
@@ -66,12 +105,14 @@ final class SettingsManager: ObservableObject {
         userDefaults: UserDefaults = .standard,
         defaultSettingsDirectory: URL = SettingsManager.defaultSettingsDirectory,
         fileManager: FileManager = .default,
-        migrateLegacySettings: Bool = true
+        migrateLegacySettings: Bool = true,
+        legacySettingsURL: URL? = SettingsManager.defaultLegacySettingsURL
     ) {
         self.fileManager = fileManager
         self.userDefaults = userDefaults
         self.configuredDefaultSettingsDirectory = defaultSettingsDirectory.standardizedFileURL
         self.migrateLegacySettings = migrateLegacySettings
+        self.legacySettingsURL = legacySettingsURL
 
         let storedDirectory = userDefaults
             .string(forKey: Self.customDirectoryDefaultsKey)
@@ -106,8 +147,13 @@ final class SettingsManager: ObservableObject {
     func replace(_ newSettings: WallpaperSettings) -> Result<Void, SettingsManagerError> {
         let normalizedSettings = newSettings.normalized()
         do {
+            // shortcut: the write blocks the main actor, upgrade when the persistence API can write off the main actor
             try Self.persist(normalizedSettings, to: settingsURL)
-            settings = normalizedSettings
+            settingsSubject.send(normalizedSettings)
+            // The settings file can be missing, for example when the legacy
+            // migration is still pending. The watcher can only watch a file
+            // that exists, so it starts with the first write.
+            startFileWatcher()
             clearError()
             onSettingsChanged?()
             return .success(())
@@ -136,15 +182,38 @@ final class SettingsManager: ObservableObject {
 
             if shouldMigrateLegacy,
                migrateLegacySettings,
-               !fileManager.fileExists(atPath: settingsURL.path),
-               let migrated = try loadLegacySettingsIfAvailable() {
-                try Self.persist(migrated, to: settingsURL)
-                settings = migrated
-                return
+               !fileManager.fileExists(atPath: settingsURL.path) {
+                switch loadLegacySettingsIfAvailable() {
+                case .migrated(let migrated):
+                    try Self.persist(migrated, to: settingsURL)
+                    settingsSubject.send(migrated)
+                    return
+                case .unreadable:
+                    // The legacy file is the only copy of the settings: the
+                    // location stays empty, so the next launch retries the
+                    // migration.
+                    return
+                case .none:
+                    break
+                }
             }
 
             if fileManager.fileExists(atPath: settingsURL.path) {
-                settings = try Self.loadSettings(from: settingsURL)
+                do {
+                    settingsSubject.send(try Self.loadSettings(from: settingsURL))
+                } catch let error as SettingsManagerError {
+                    // The unreadable file is the only copy of the user's folders,
+                    // themes and history: keep it before anything can overwrite it.
+                    let quarantined = Self.quarantineUnreadableFile(at: settingsURL, using: fileManager)
+                    report(error)
+                    // A fresh default file takes its place, so the watcher can run.
+                    // Without a safe copy the unreadable file has to stay.
+                    if quarantined {
+                        // A failed write must be reported: the app would run
+                        // without any settings file at all.
+                        try Self.persist(settings, to: settingsURL)
+                    }
+                }
             } else {
                 try Self.persist(settings, to: settingsURL)
             }
@@ -155,27 +224,38 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    private func loadLegacySettingsIfAvailable() throws -> WallpaperSettings? {
-        guard let legacyURL = Self.legacySettingsURL else { return nil }
-        guard fileManager.fileExists(atPath: legacyURL.path) else { return nil }
+    /// The result of the legacy migration.
+    private enum LegacySettings {
+        /// There is no legacy settings file.
+        case none
+        /// The legacy settings file was read.
+        case migrated(WallpaperSettings)
+        /// The legacy settings file exists but could not be read.
+        case unreadable
+    }
+
+    private func loadLegacySettingsIfAvailable() -> LegacySettings {
+        guard let legacyURL = legacySettingsURL else { return .none }
+        guard fileManager.fileExists(atPath: legacyURL.path) else { return .none }
 
         do {
             let settings = try Self.loadSettings(from: legacyURL)
             print("[SettingsManager] Migrated settings from legacy Electron location")
-            return settings
-        } catch let error as SettingsManagerError {
+            return .migrated(settings)
+        } catch {
+            // The app starts with the default settings, so the reason has to be
+            // visible. The legacy file stays on disk, so the user can recover
+            // it by hand.
+            let error = SettingsManagerError.decodeFailed(
+                path: legacyURL.path,
+                reason: "the legacy settings could not be read, so the app is using the default settings. "
+                    + "The file was kept so you can recover it by hand."
+            )
+            legacyMigrationError = error
             report(error)
-            return nil
+            return .unreadable
         }
     }
-
-    private static var legacySettingsURL: URL? {
-        guard let home = FileManager.default.urls(for: .userDirectory, in: .userDomainMask).first else {
-            return nil
-        }
-        return home.appendingPathComponent(".wallpaper-selector/settings.json")
-    }
-
 
     private func switchSettingsLocation(to directory: URL, customDirectoryPath: String?) throws {
         let normalized = directory.standardizedFileURL
@@ -196,7 +276,7 @@ final class SettingsManager: ObservableObject {
             stopFileWatcher()
             settingsDirectory = normalized
             settingsURL = destinationURL
-            settings = destinationSettings
+            settingsSubject.send(destinationSettings)
 
             if let customDirectoryPath {
                 userDefaults.set(customDirectoryPath, forKey: Self.customDirectoryDefaultsKey)
@@ -229,6 +309,33 @@ final class SettingsManager: ObservableObject {
                 path: directory.path,
                 reason: error.localizedDescription
             )
+        }
+    }
+
+    /// Moves an unreadable settings file next to it, so the next save cannot
+    /// destroy the only copy of the user's settings.
+    ///
+    /// Returns `true` when the unreadable content is stored at the `.corrupt`
+    /// path. The caller must not overwrite the unreadable file when it is
+    /// `false`.
+    private nonisolated static func quarantineUnreadableFile(at url: URL, using fileManager: FileManager) -> Bool {
+        let corruptURL = url
+            .deletingLastPathComponent()
+            .appendingPathComponent(url.lastPathComponent + ".corrupt")
+        if fileManager.fileExists(atPath: corruptURL.path) {
+            try? fileManager.removeItem(at: corruptURL)
+        }
+        do {
+            try fileManager.moveItem(at: url, to: corruptURL)
+            return true
+        } catch {
+            // The copy stays in place: the content survives even when the move fails.
+            do {
+                try fileManager.copyItem(at: url, to: corruptURL)
+                return true
+            } catch {
+                return false
+            }
         }
     }
 
@@ -303,45 +410,85 @@ final class SettingsManager: ObservableObject {
         stopFileWatcher()
 
         let url = settingsURL
-        let directory = settingsDirectory
-        let fallback = settings
+        let modificationDateBeforeIO = modificationDate(of: url)
+        externalChangeGeneration &+= 1
+        let generation = externalChangeGeneration
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             let outcome = await Self.performExternalChangeIO(
                 url: url,
-                directory: directory,
-                fallback: fallback,
+                directory: self.settingsDirectory,
+                currentSettings: { @MainActor in self.settings },
                 fileManager: self.fileManager
             )
             guard self.settingsURL == url else { self.startFileWatcher(); return }
-            switch outcome {
-            case .success(.unchanged):
-                self.clearError()
-            case .success(.reloaded(let reloaded)):
-                self.settings = reloaded
-                self.onSettingsChanged?()
-                self.clearError()
-            case .success(.recreated):
-                self.onSettingsChanged?()
-                self.clearError()
-            case .failure(let error):
-                self.report(error)
+            let isCurrent = generation == self.externalChangeGeneration
+            if isCurrent {
+                self.applyExternalChangeOutcome(outcome)
             }
             self.startFileWatcher()
+
+            // A write that landed while the watcher was stopped is never
+            // delivered, so the file is read once more. The watcher stays on
+            // this time, so no write can be missed.
+            if isCurrent, self.modificationDate(of: url) != modificationDateBeforeIO {
+                self.reloadChangedFile(url: url, generation: generation)
+            }
         }
+    }
+
+    /// Reads the file again after a change that landed while the watcher was
+    /// stopped. The watcher keeps running, so a write can no longer be lost.
+    private func reloadChangedFile(url: URL, generation: UInt) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await Self.performExternalChangeIO(
+                url: url,
+                directory: self.settingsDirectory,
+                currentSettings: { @MainActor in self.settings },
+                fileManager: self.fileManager
+            )
+            guard self.settingsURL == url, generation == self.externalChangeGeneration else { return }
+            self.applyExternalChangeOutcome(outcome)
+        }
+    }
+
+    private func applyExternalChangeOutcome(_ outcome: Result<ExternalChangeOutcome, SettingsManagerError>) {
+        switch outcome {
+        case .success(.unchanged):
+            // A failed write is still true: the file on disk is older than the
+            // settings in memory, so the message must stay visible.
+            if case .writeFailed? = lastError { break }
+            clearError()
+        case .success(.reloaded(let reloaded)):
+            settingsSubject.send(reloaded)
+            onSettingsChanged?()
+            clearError()
+        case .success(.recreated):
+            onSettingsChanged?()
+            clearError()
+        case .failure(let error):
+            report(error)
+        }
+    }
+
+    private func modificationDate(of url: URL) -> Date? {
+        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+        return attributes?[.modificationDate] as? Date
     }
 
     private nonisolated static func performExternalChangeIO(
         url: URL,
         directory: URL,
-        fallback: WallpaperSettings,
+        currentSettings: @MainActor @Sendable () async -> WallpaperSettings,
         fileManager: FileManager
     ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
         if fileManager.fileExists(atPath: url.path) {
             do {
                 let reloaded = try Self.loadSettings(from: url)
-                return .success(reloaded == fallback ? .unchanged : .reloaded(reloaded))
+                let current = await currentSettings()
+                return .success(reloaded == current ? .unchanged : .reloaded(reloaded))
             } catch let error as SettingsManagerError {
                 return .failure(error)
             } catch {
@@ -352,7 +499,10 @@ final class SettingsManager: ObservableObject {
             // arrives, recreate the deleted file from the last known-good in-memory state.
             do {
                 try Self.createDirectoryIfNeeded(at: directory, using: fileManager)
-                try Self.persist(fallback, to: url)
+                // The settings are read when the file is written, not before
+                // the IO started: a local change that landed in between must
+                // not be overwritten by an older snapshot.
+                try Self.persist(await currentSettings(), to: url)
                 return .success(.recreated)
             } catch let error as SettingsManagerError {
                 return .failure(error)
@@ -370,6 +520,12 @@ final class SettingsManager: ObservableObject {
     }
 
     private func clearError() {
+        // The pending legacy migration keeps its message: it explains why the
+        // app starts with the default settings.
+        if let legacyMigrationError {
+            lastError = legacyMigrationError
+            return
+        }
         lastError = nil
     }
 }

@@ -26,6 +26,15 @@ final class AppearanceMonitor: NSObject {
 
     var onAppearanceChanged: ((String?) -> Void)?
 
+    /// Reports every appearance change, even when no wallpaper was applied.
+    var onSystemAppearanceChanged: (() -> Void)?
+
+    /// Reports a wallpaper that could not be applied.
+    ///
+    /// The rotation service has the same channel, so a failed wallpaper
+    /// change is visible in the menu bar and in the settings.
+    var onError: ((String) -> Void)?
+
     private let settingsManager: SettingsManager
     private let wallpaperProvider: WallpaperSetting
     private let themeProvider: ThemeProvider
@@ -74,14 +83,14 @@ final class AppearanceMonitor: NSObject {
         applyTask?.cancel()
         applyTask = nil
 
+        // The scope and the shown images depend on the appearance, so the
+        // change is reported before any early return.
+        onSystemAppearanceChanged?()
+
         let settings = settingsManager.settings
         guard settings.matchSystemAppearance else { return }
 
         let isDark = appearanceProvider.isDarkAppearance
-        let targetThemeID = isDark ? settings.appearanceDarkThemeID : settings.appearanceLightThemeID
-        if targetThemeID != settings.activeThemeID {
-            settingsManager.update { $0.activeThemeID = targetThemeID }
-        }
 
         let wallpapers = themeProvider.effectiveAppearanceWallpapers(isDarkAppearance: isDark)
         let pinnedPath = isDark ? wallpapers.dark : wallpapers.light
@@ -96,7 +105,7 @@ final class AppearanceMonitor: NSObject {
             return
         }
 
-        let folders = themeProvider.effectiveFolders()
+        let folders = themeProvider.effectiveFolders(isDarkAppearance: isDark)
         let discoverWallpapers = self.discoverWallpapers
         applyTask = Task { @MainActor [weak self] in
             let availableWallpapers = await discoverWallpapers(folders)
@@ -119,14 +128,39 @@ final class AppearanceMonitor: NSObject {
     private func applyWallpaper(at url: URL) {
         do {
             try wallpaperProvider.setWallpaper(url)
-            settingsManager.update {
-                $0.currentWallpaper = url.path
-                $0.recordWallpaperInHistory(url.path)
-            }
-            onAppearanceChanged?(url.path)
         } catch {
-            print("[AppearanceMonitor] Failed to apply wallpaper: \(error)")
+            // The wallpaper reached at least one display, so it is on the
+            // screen and has to be recorded. The failed display is reported.
+            guard (error as? WallpaperProviderError)?.didSetOnAtLeastOneDisplay == true else {
+                print("[AppearanceMonitor] Failed to apply wallpaper: \(error)")
+                onError?(error.localizedDescription)
+                return
+            }
+            recordWallpaper(url)
+            print("[AppearanceMonitor] Failed to apply wallpaper on every display: \(error)")
+            // The error is reported after the wallpaper was stored: the write
+            // of the settings clears the wallpaper error.
+            onError?(error.localizedDescription)
+            return
         }
+
+        guard recordWallpaper(url) else { return }
+        onAppearanceChanged?(url.path)
+    }
+
+    /// Stores the applied wallpaper. The settings manager reports a failed
+    /// write itself, so the wallpaper is not reported as applied then.
+    @discardableResult
+    private func recordWallpaper(_ url: URL) -> Bool {
+        let result = settingsManager.update {
+            $0.currentWallpaper = url.path
+            $0.recordWallpaperInHistory(url.path)
+        }
+        if case .failure(let error) = result {
+            print("[AppearanceMonitor] Failed to store the applied wallpaper: \(error)")
+            return false
+        }
+        return true
     }
 
     private func applyFallbackIfRequestIsCurrent(
@@ -137,7 +171,7 @@ final class AppearanceMonitor: NSObject {
     ) {
         guard settingsManager.settings.matchSystemAppearance,
               appearanceProvider.isDarkAppearance == expectedDarkAppearance,
-              themeProvider.effectiveFolders() == folders else { return }
+              themeProvider.effectiveFolders(isDarkAppearance: expectedDarkAppearance) == folders else { return }
 
         let currentPins = themeProvider.effectiveAppearanceWallpapers(
             isDarkAppearance: expectedDarkAppearance

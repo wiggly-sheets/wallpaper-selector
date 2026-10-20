@@ -19,8 +19,15 @@ final class AppCoordinator: ObservableObject {
     private var previousSettings: WallpaperSettings
     private var menuBarHostingController: MenuBarHostingViewController?
 
-    init() {
-        let settingsManager = SettingsManager()
+    convenience init() {
+        self.init(settingsManager: SettingsManager(), injectedHotKeyManager: nil, startsMenuBar: true)
+    }
+
+    init(
+        settingsManager: SettingsManager,
+        injectedHotKeyManager: HotKeyManager?,
+        startsMenuBar: Bool
+    ) {
         let wallpaperProvider = WallpaperProvider()
         let themeProvider = ThemeProvider(settingsManager: settingsManager)
         let rotationService = RotationService(
@@ -45,7 +52,7 @@ final class AppCoordinator: ObservableObject {
         self.themeProvider = themeProvider
         self.rotationService = rotationService
         self.appearanceMonitor = appearanceMonitor
-        hotKeyManager = HotKeyManager(settingsManager: settingsManager)
+        hotKeyManager = injectedHotKeyManager ?? HotKeyManager(settingsManager: settingsManager)
         self.launchAtLoginManager = launchAtLoginManager
         self.appState = appState
         settingsViewModel = SettingsViewModel(
@@ -55,21 +62,43 @@ final class AppCoordinator: ObservableObject {
         allSpacesService = AllSpacesService()
         previousSettings = settingsManager.settings
 
-        appState.$settings
+        appState.settingsPublisher
             .dropFirst()
-            .sink { [weak self] _ in self?.handleSettingsChange() }
+            .sink { [weak self] settings in self?.handleSettingsChange(settings) }
             .store(in: &cancellables)
 
-        startMenuBar()
+        // The system can change the appearance without a settings change: the
+        // effective folders and the shown images have to follow it.
+        appearanceMonitor.onSystemAppearanceChanged = { [weak self] in
+            self?.appState.refreshDerivedState()
+        }
+
+        // A wallpaper that could not be applied is reported through the same
+        // channel as a failed rotation, so it shows up in the menu bar and in
+        // the settings.
+        appearanceMonitor.onError = { [weak self] message in
+            self?.rotationService.reportWallpaperError(message)
+        }
+
+        if startsMenuBar {
+            startMenuBar()
+        }
         allSpacesService.onResult = { [weak self] result in
             guard case let .manualActionRequired(enabled, reason) = result else { return }
-            self?.menuBarHostingController?.showAllSpacesManualFallback(
-                enabled: enabled,
-                reason: reason
-            )
+            // The alert runs a modal loop: it must not spin inside the
+            // settings publish cascade.
+            DispatchQueue.main.async { [weak self] in
+                self?.menuBarHostingController?.showAllSpacesManualFallback(
+                    enabled: enabled,
+                    reason: reason
+                )
+            }
         }
         hotKeyManager.onHotKeyPressed = { [weak self] identifier in
             self?.menuBarHostingController?.handleHotKey(identifier)
+        }
+        hotKeyManager.onRegistrationError = { [weak self] message in
+            self?.settingsViewModel.setHotKeyErrorMessage(message)
         }
         hotKeyManager.register()
         rotationService.updateSettings()
@@ -87,14 +116,13 @@ final class AppCoordinator: ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 
-    private func handleSettingsChange() {
-        let current = appState.settings
+    private func handleSettingsChange(_ current: WallpaperSettings) {
         let previous = previousSettings
         previousSettings = current
 
         rotationService.updateSettings()
         if previous.shortcuts != current.shortcuts {
-            hotKeyManager.updateShortcuts()
+            hotKeyManager.updateShortcuts(current.shortcuts)
         }
 
         if previous.allSpaces != current.allSpaces {
@@ -109,7 +137,11 @@ final class AppCoordinator: ObservableObject {
             || previous.themes != current.themes
 
         if current.matchSystemAppearance && appearanceContextChanged {
-            appearanceMonitor.applyAppearanceWallpaperIfNeeded()
+            // The wallpaper application writes the settings again. Running it
+            // inside the publish cascade would nest a second publish.
+            Task { @MainActor [weak self] in
+                self?.appearanceMonitor.applyAppearanceWallpaperIfNeeded()
+            }
         }
     }
 
@@ -124,5 +156,9 @@ final class AppCoordinator: ObservableObject {
 
     @objc private func handleDidBecomeActive() {
         appearanceMonitor.applyAppearanceWallpaperIfNeeded()
+        // The app that owned the shortcut may have quit: registering again
+        // takes the shortcut back. A successful registration reports no error,
+        // so the error item disappears on its own.
+        hotKeyManager.register()
     }
 }

@@ -2,17 +2,29 @@ import Foundation
 import Carbon
 
 @MainActor
-final class HotKeyManager {
+class HotKeyManager {
 
     private(set) var registeredHotKeys: [EventHotKeyRef] = []
 
     var onHotKeyPressed: ((String) -> Void)?
 
+    /// Reports why a shortcut could not be registered. `nil` means every
+    /// shortcut registered fine.
+    var onRegistrationError: ((String?) -> Void)?
+
 
     private var settingsManager: SettingsManager
     private var eventHandlerUPP: EventHandlerUPP?
     private var eventHandler: EventHandlerRef?
-    private var hotKeyIdentifiers: [UInt32: String] = [:]
+    private var managerBox: WeakHotKeyManagerBox?
+
+    /// The signature of the hot keys. It is app specific, so another app
+    /// cannot register a hot key with the same id.
+    private static let hotKeySignature = OSType(0x57534C53) // 'WSLS'
+
+    /// The id of the next hot key. It only grows, so a re-registered hot key
+    /// never reuses the id of another one.
+    private var nextHotKeyID: UInt32 = 1
 
 
     init(settingsManager: SettingsManager) {
@@ -20,33 +32,19 @@ final class HotKeyManager {
         installEventHandler()
     }
 
-    isolated deinit {
+    deinit {
         for hotKey in registeredHotKeys {
             UnregisterEventHotKey(hotKey)
         }
         if let eventHandler { RemoveEventHandler(eventHandler) }
+        // On macOS the event handler UPP is a plain function pointer, so
+        // dropping the Swift closure is what releases it.
+        eventHandlerUPP = nil
     }
 
 
     func register() {
-        unregisterAll()
-
-        let shortcuts = settingsManager.settings.shortcuts
-
-        if let showMain = shortcuts.showMain,
-           let keyCombo = parseAccelerator(showMain) {
-            registerHotKey(keyCombo, identifier: "showMain")
-        }
-
-        if let showPreview = shortcuts.showPreview,
-           let keyCombo = parseAccelerator(showPreview) {
-            registerHotKey(keyCombo, identifier: "showPreview")
-        }
-
-        if let showMenu = shortcuts.showMenu,
-           let keyCombo = parseAccelerator(showMenu) {
-            registerHotKey(keyCombo, identifier: "showMenu")
-        }
+        registerShortcuts(settingsManager.settings.shortcuts)
     }
 
     func unregisterAll() {
@@ -54,21 +52,58 @@ final class HotKeyManager {
             UnregisterEventHotKey(ref)
         }
         registeredHotKeys = []
-        hotKeyIdentifiers = [:]
+        managerBox?.removeAllIdentifiers()
     }
 
-    func updateShortcuts() {
-        register()
+    /// Re-registers the given shortcuts. The value is passed in so the caller
+    /// never has to read the settings again while a change is being published.
+    func updateShortcuts(_ shortcuts: Shortcuts) {
+        registerShortcuts(shortcuts)
     }
 
 
-    private func registerHotKey(_ combo: KeyCombo, identifier: String) {
+    private func registerShortcuts(_ shortcuts: Shortcuts) {
+        unregisterAll()
+
+        var failures: [String] = []
+
+        if let showMain = shortcuts.showMain {
+            register(shortcut: showMain, identifier: "showMain", failures: &failures)
+        }
+
+        if let showPreview = shortcuts.showPreview {
+            register(shortcut: showPreview, identifier: "showPreview", failures: &failures)
+        }
+
+        if let showMenu = shortcuts.showMenu {
+            register(shortcut: showMenu, identifier: "showMenu", failures: &failures)
+        }
+
+        onRegistrationError?(failures.isEmpty ? nil : failures.joined(separator: " "))
+    }
+
+
+    private func register(shortcut: String, identifier: String, failures: inout [String]) {
+        guard let keyCombo = parseAccelerator(shortcut) else {
+            failures.append("Could not read the shortcut \(shortcut).")
+            return
+        }
+        guard registerHotKey(keyCombo, identifier: identifier) else {
+            failures.append(
+                "Could not register the shortcut \(shortcut). Another app may already use it."
+            )
+            return
+        }
+    }
+
+    private func registerHotKey(_ combo: KeyCombo, identifier: String) -> Bool {
         var hotKeyRef: EventHotKeyRef?
-        let id = UInt32(registeredHotKeys.count + 1)
+        let id = nextHotKeyID
+        nextHotKeyID += 1
         let result = RegisterEventHotKey(
             UInt32(combo.keyCode),
             UInt32(combo.modifiers),
-            EventHotKeyID(signature: OSType(0), id: id),
+            EventHotKeyID(signature: Self.hotKeySignature, id: id),
             GetEventDispatcherTarget(),
             0,
             &hotKeyRef
@@ -76,10 +111,12 @@ final class HotKeyManager {
 
         if result == noErr, let ref = hotKeyRef {
             registeredHotKeys.append(ref)
-            hotKeyIdentifiers[id] = identifier
-        } else {
-            print("[HotKeyManager] Failed to register hot-key '\(identifier)': \(result)")
+            managerBox?.setIdentifier(identifier, for: id)
+            return true
         }
+
+        print("[HotKeyManager] Failed to register hot-key '\(identifier)': \(result)")
+        return false
     }
 
     func parseAccelerator(_ string: String) -> KeyCombo? {
@@ -152,6 +189,9 @@ final class HotKeyManager {
 
     private func installEventHandler() {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let box = WeakHotKeyManagerBox()
+        box.manager = self
+        managerBox = box
         eventHandlerUPP = { _, event, userData in
             guard let event, let userData else { return noErr }
             var hotKeyID = EventHotKeyID()
@@ -165,10 +205,13 @@ final class HotKeyManager {
                 &hotKeyID
             )
             guard status == noErr else { return status }
-            let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
-            let identifier = hotKeyID.id
+            let box = Unmanaged<WeakHotKeyManagerBox>.fromOpaque(userData).takeUnretainedValue()
+            guard let manager = box.manager else { return noErr }
+            // The identifier is resolved here, not in the task below: a
+            // re-registration clears the map, so a press that waits for the
+            // main actor would be lost.
+            guard let action = box.identifier(for: hotKeyID.id) else { return noErr }
             Task { @MainActor in
-                guard let action = manager.hotKeyIdentifiers[identifier] else { return }
                 manager.onHotKeyPressed?(action)
             }
             return noErr
@@ -179,9 +222,39 @@ final class HotKeyManager {
             eventHandlerUPP,
             1,
             &eventType,
-            Unmanaged.passUnretained(self).toOpaque(),
+            Unmanaged.passUnretained(box).toOpaque(),
             &eventHandler
         )
+    }
+}
+
+/// Keeps the manager reachable from the Carbon event handler without keeping
+/// it alive: the handler only holds the box, the box only holds a weak link.
+///
+/// The hot-key identifiers live here too, so the Carbon handler can resolve
+/// the pressed shortcut without waiting for the main actor.
+private final class WeakHotKeyManagerBox {
+    weak var manager: HotKeyManager?
+
+    private let lock = NSLock()
+    private var identifiers: [UInt32: String] = [:]
+
+    func identifier(for id: UInt32) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return identifiers[id]
+    }
+
+    func setIdentifier(_ identifier: String, for id: UInt32) {
+        lock.lock()
+        defer { lock.unlock() }
+        identifiers[id] = identifier
+    }
+
+    func removeAllIdentifiers() {
+        lock.lock()
+        defer { lock.unlock() }
+        identifiers.removeAll()
     }
 }
 

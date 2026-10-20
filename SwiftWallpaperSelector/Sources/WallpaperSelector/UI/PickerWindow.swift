@@ -63,7 +63,7 @@ struct PickerWindow: View {
                     Label("Rotation…", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.borderless)
-                .disabled(settingsViewModel.matchSystemAppearance)
+                .disabled(settingsViewModel.isRotationControlDisabled)
 
                 Button(action: { showingAppearanceDialog = true }) {
                     Label("Appearance…", systemImage: "circle.lefthalf.filled")
@@ -172,10 +172,9 @@ struct PickerWindow: View {
                 .frame(width: 360, height: 300)
         }
         .sheet(isPresented: $showingAppearanceDialog) {
-            AppearanceDialog()
+            AppearanceSheet()
                 .environmentObject(settingsViewModel)
                 .environmentObject(appState)
-                .frame(width: 420, height: 400)
         }
         .sheet(isPresented: $showingFoldersDialog) {
             FoldersDialog()
@@ -311,7 +310,7 @@ struct RotationDialog: View {
                     }
                 }
                 .pickerStyle(.menu)
-                .disabled(settingsViewModel.matchSystemAppearance)
+                .disabled(settingsViewModel.isRotationControlDisabled)
                 .onChange(of: settingsViewModel.intervalMinutes) { settingsViewModel.setInterval($0) }
 
                 Text("On Interval:")
@@ -334,7 +333,7 @@ struct RotationDialog: View {
                     .disabled(settingsViewModel.themes.isEmpty)
                 }
                 .pickerStyle(.menu)
-                .disabled(settingsViewModel.intervalMinutes == .off || settingsViewModel.matchSystemAppearance)
+                .disabled(settingsViewModel.intervalMinutes == .off || settingsViewModel.isRotationControlDisabled)
                 .onChange(of: settingsViewModel.rotationAction) { settingsViewModel.setRotationAction($0) }
             }
             .padding(.horizontal)
@@ -352,9 +351,19 @@ struct RotationDialog: View {
     }
 }
 
+/// The Appearance sheet of the main window.
+///
+/// The sheet has no fixed height: the body grows with its content and
+/// scrolls when it is longer, so the OK button always stays reachable.
+struct AppearanceSheet: View {
+    var body: some View {
+        AppearanceDialog()
+            .frame(width: 420)
+    }
+}
+
 struct AppearanceDialog: View {
     @EnvironmentObject var settingsViewModel: SettingsViewModel
-    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     @State private var lightThemeID: String?
@@ -364,101 +373,113 @@ struct AppearanceDialog: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Text("Light & Dark Wallpaper")
-                .font(.headline)
+            // The body scrolls, so a body that is longer than the sheet
+            // cannot push the OK button out of it. The button stays outside
+            // the scroll area, so it is always reachable.
+            ScrollView {
+                VStack(spacing: 20) {
+                    Text("Light & Dark Wallpaper")
+                        .font(.headline)
 
-            let themeName = settingsViewModel.activeThemeID == nil ?
-                "All Folders" :
-                (settingsViewModel.themes.first { $0.id == settingsViewModel.activeThemeID }?.name ?? "Theme")
-            Text("Applies while \"\(themeName)\" is the active theme.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
-            Divider()
-
-            Toggle(isOn: $settingsViewModel.matchSystemAppearance) {
-                Label("Match System Appearance", systemImage: "circle.lefthalf.filled")
-            }
-            .toggleStyle(.switch)
-            .onChange(of: settingsViewModel.matchSystemAppearance) { newValue in
-                settingsViewModel.setMatchSystemAppearance(newValue)
-            }
-
-            VStack(alignment: .leading, spacing: 12) {
-                    Text("Light Theme")
+                    Text("The light pin belongs to \"\(lightScopeName)\" and the dark pin to \"\(darkScopeName)\".")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
-
-                    Picker("Light Theme", selection: $lightThemeID) {
-                        Text("None").tag(Optional<String>.none as String?)
-                        ForEach(settingsViewModel.themes) { theme in
-                            Text(theme.name).tag(Optional(theme.id))
-                        }
-                    }
-                    .pickerStyle(.menu)
-
-                    Text("Dark Theme")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    Picker("Dark Theme", selection: $darkThemeID) {
-                        Text("None").tag(Optional<String>.none as String?)
-                        ForEach(settingsViewModel.themes) { theme in
-                            Text(theme.name).tag(Optional(theme.id))
-                        }
-                    }
-                    .pickerStyle(.menu)
+                        .multilineTextAlignment(.center)
 
                     Divider()
 
-                    Text("Optionally pin an exact image for \(themeName).")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    HStack {
-                        Text("Light Wallpaper")
-                        Spacer()
-                        Menu {
-                            Button("None") { lightWallpaper = nil }
-                            Divider()
-                            ForEach(appState.currentThemeImages, id: \.self) { url in
-                                Button(action: { lightWallpaper = url.path }) {
-                                    Text(url.lastPathComponent)
-                                }
-                            }
-                        } label: {
-                            Text(lightWallpaper == nil ? "None" : (lightWallpaper! as NSString).lastPathComponent)
-                                .frame(minWidth: 120, alignment: .trailing)
-                        }
+                    Toggle(isOn: $settingsViewModel.matchSystemAppearance) {
+                        Label("Match System Appearance", systemImage: "circle.lefthalf.filled")
+                    }
+                    .toggleStyle(.switch)
+                    .onChange(of: settingsViewModel.matchSystemAppearance) { newValue in
+                        settingsViewModel.setMatchSystemAppearance(newValue)
                     }
 
-                    HStack {
-                        Text("Dark Wallpaper")
-                        Spacer()
-                        Menu {
-                            Button("None") { darkWallpaper = nil }
-                            Divider()
-                            ForEach(appState.currentThemeImages, id: \.self) { url in
-                                Button(action: { darkWallpaper = url.path }) {
-                                    Text(url.lastPathComponent)
+                    VStack(alignment: .leading, spacing: 12) {
+                            Text("Light Theme")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+
+                            Picker("Light Theme", selection: $lightThemeID) {
+                                Text("None").tag(Optional<String>.none as String?)
+                                ForEach(settingsViewModel.themes) { theme in
+                                    Text(theme.name).tag(Optional(theme.id))
                                 }
                             }
-                        } label: {
-                            Text(darkWallpaper == nil ? "None" : (darkWallpaper! as NSString).lastPathComponent)
-                                .frame(minWidth: 120, alignment: .trailing)
-                        }
+                            .pickerStyle(.menu)
+                            .onChange(of: lightThemeID) { newValue in
+                                lightWallpaper = settingsViewModel.appearancePin(forThemeID: newValue, dark: false)
+                            }
+
+                            Text("Dark Theme")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+
+                            Picker("Dark Theme", selection: $darkThemeID) {
+                                Text("None").tag(Optional<String>.none as String?)
+                                ForEach(settingsViewModel.themes) { theme in
+                                    Text(theme.name).tag(Optional(theme.id))
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: darkThemeID) { newValue in
+                                darkWallpaper = settingsViewModel.appearancePin(forThemeID: newValue, dark: true)
+                            }
+
+                            Divider()
+
+                            Text("Optionally pin an exact image for each appearance.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+
+                            HStack {
+                                Text("Light Wallpaper")
+                                Spacer()
+                                Menu {
+                                    Button("None") { lightWallpaper = nil }
+                                    Divider()
+                                    ForEach(settingsViewModel.appearancePinImages(forThemeID: lightThemeID), id: \.self) { url in
+                                        Button(action: { lightWallpaper = url.path }) {
+                                            Text(url.lastPathComponent)
+                                        }
+                                    }
+                                } label: {
+                                    Text(lightWallpaper == nil ? "None" : (lightWallpaper! as NSString).lastPathComponent)
+                                        .frame(minWidth: 120, alignment: .trailing)
+                                }
+                            }
+
+                            HStack {
+                                Text("Dark Wallpaper")
+                                Spacer()
+                                Menu {
+                                    Button("None") { darkWallpaper = nil }
+                                    Divider()
+                                    ForEach(settingsViewModel.appearancePinImages(forThemeID: darkThemeID), id: \.self) { url in
+                                        Button(action: { darkWallpaper = url.path }) {
+                                            Text(url.lastPathComponent)
+                                        }
+                                    }
+                                } label: {
+                                    Text(darkWallpaper == nil ? "None" : (darkWallpaper! as NSString).lastPathComponent)
+                                        .frame(minWidth: 120, alignment: .trailing)
+                                }
+                            }
                     }
+                    .padding(.horizontal)
+                }
             }
-            .padding(.horizontal)
+            // The sheet grows with its body, but a body that is longer than
+            // the cap scrolls instead of pushing the OK button off the sheet.
+            .frame(minHeight: 220, maxHeight: 400)
 
             Button(action: {
                 settingsViewModel.setAppearanceConfiguration(
                     lightThemeID: lightThemeID,
                     darkThemeID: darkThemeID,
                     lightWallpaper: lightWallpaper,
-                    darkWallpaper: darkWallpaper,
-                    forThemeID: settingsViewModel.activeThemeID
+                    darkWallpaper: darkWallpaper
                 )
                 dismiss()
             }) {
@@ -468,19 +489,30 @@ struct AppearanceDialog: View {
             .buttonStyle(.borderedProminent)
         }
         .padding()
-        .frame(width: 420)
         .onAppear {
             lightThemeID = settingsViewModel.appearanceLightThemeID
             darkThemeID = settingsViewModel.appearanceDarkThemeID
-            if let activeThemeID = settingsViewModel.activeThemeID,
-               let theme = settingsViewModel.themes.first(where: { $0.id == activeThemeID }) {
-                lightWallpaper = theme.lightWallpaper
-                darkWallpaper = theme.darkWallpaper
-            } else {
-                lightWallpaper = settingsViewModel.allFoldersLightWallpaper
-                darkWallpaper = settingsViewModel.allFoldersDarkWallpaper
-            }
+            lightWallpaper = settingsViewModel.appearancePin(forThemeID: lightThemeID, dark: false)
+            darkWallpaper = settingsViewModel.appearancePin(forThemeID: darkThemeID, dark: true)
         }
+    }
+
+    /// The name of the scope the light pin is stored in.
+    private var lightScopeName: String {
+        scopeName(forThemeID: lightThemeID)
+    }
+
+    /// The name of the scope the dark pin is stored in.
+    private var darkScopeName: String {
+        scopeName(forThemeID: darkThemeID)
+    }
+
+    private func scopeName(forThemeID themeID: String?) -> String {
+        guard let themeID,
+              let theme = settingsViewModel.themes.first(where: { $0.id == themeID }) else {
+            return "All Folders"
+        }
+        return theme.name
     }
 }
 

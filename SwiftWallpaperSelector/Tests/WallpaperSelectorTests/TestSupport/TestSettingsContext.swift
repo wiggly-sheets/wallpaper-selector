@@ -33,6 +33,12 @@ final class TestSettingsContext {
 
     deinit {
         userDefaults.removePersistentDomain(forName: userDefaultsSuiteName)
+        // A test can leave the settings folder read-only, and removing a file
+        // out of it needs write permission, so the mode is restored first.
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: settingsDirectory.path
+        )
         try? FileManager.default.removeItem(at: rootDirectory)
     }
 
@@ -53,6 +59,16 @@ final class TestSettingsContext {
         )
     }
 
+    /// A manager that migrates the settings of the given legacy file.
+    func makeSettingsManagerMigratingLegacySettings(from legacyURL: URL) -> SettingsManager {
+        SettingsManager(
+            userDefaults: userDefaults,
+            defaultSettingsDirectory: defaultSettingsDirectory,
+            migrateLegacySettings: true,
+            legacySettingsURL: legacyURL
+        )
+    }
+
     func directory(named name: String) -> URL {
         rootDirectory.appendingPathComponent(name, isDirectory: true)
     }
@@ -66,17 +82,21 @@ private enum TestSettingsContextError: Error {
 final class MockWallpaperProvider: WallpaperSetting {
     private(set) var appliedURLs: [URL] = []
     var errorToThrow: Error?
+    /// Called after a wallpaper was recorded, so a test can await the effect.
+    var onSetWallpaper: ((URL) -> Void)?
 
     func setWallpaper(_ url: URL) throws {
         if let errorToThrow {
             throw errorToThrow
         }
         appliedURLs.append(url)
+        onSetWallpaper?(url)
     }
 
     func reset() {
         appliedURLs = []
         errorToThrow = nil
+        onSetWallpaper = nil
     }
 }
 

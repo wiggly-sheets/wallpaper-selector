@@ -21,6 +21,7 @@ final class MenuBarHostingViewController: NSViewController {
     private var popoverController: TrayPopoverWindowController?
     private var fallbackSettingsWindowController: NSWindowController?
     private var pickerWindowController: NSWindowController?
+    private var pickerWindowObserver: NSObjectProtocol?
 
     init(appState: AppState, settingsViewModel: SettingsViewModel) {
         self.appState = appState
@@ -36,7 +37,10 @@ final class MenuBarHostingViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        let controller = MenuBarController(viewModel: MenuBarViewModel(appState: appState))
+        let controller = MenuBarController(viewModel: MenuBarViewModel(
+            appState: appState,
+            settingsViewModel: settingsViewModel
+        ))
         controller.onShowMainWindow = { [weak self] in self?.showMainWindow() }
         controller.onShowPreview = { [weak self] in self?.showPopover() }
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
@@ -75,6 +79,9 @@ final class MenuBarHostingViewController: NSViewController {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        if let pickerWindowObserver {
+            NotificationCenter.default.removeObserver(pickerWindowObserver)
+        }
     }
 
     func handleHotKey(_ identifier: String) {
@@ -119,11 +126,22 @@ final class MenuBarHostingViewController: NSViewController {
                 defer: false
             )
             window.title = "Wallpaper Selector"
-            window.minSize = NSSize(width: 520, height: 460)
+            // The SwiftUI content sets a 920x640 minimum, so the window must
+            // not promise a smaller size.
+            window.minSize = NSSize(width: 920, height: 640)
+            window.contentMinSize = NSSize(width: 920, height: 640)
             window.contentViewController = NSHostingController(rootView: rootView)
             window.isReleasedWhenClosed = false
             window.center()
             pickerWindowController = NSWindowController(window: window)
+
+            pickerWindowObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { _ in
+                Task { await WallpaperThumbnailRepository.shared.purge() }
+            }
         }
 
         pickerWindowController?.showWindow(nil)
