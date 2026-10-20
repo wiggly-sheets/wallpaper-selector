@@ -33,7 +33,7 @@ final class MenuBarHostingViewController: NSViewController {
         controller.onShowPreview = { [weak self] in self?.showPopover() }
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         menuBarController = controller
-        controller.rebuildMenu()
+        controller.updateMenu()
 
         NotificationCenter.default.addObserver(
             self,

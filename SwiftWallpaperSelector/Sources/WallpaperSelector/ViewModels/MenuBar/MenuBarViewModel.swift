@@ -65,6 +65,35 @@ final class MenuBarViewModel: ObservableObject {
         FileManager.default.fileExists(atPath: path)
     }
 
+    /// The state the menu shows.
+    ///
+    /// The mapping from the view model to the menu lives here, so the menu
+    /// is a pure function of this state and the state can be tested
+    /// without a status item.
+    var menuState: MenuBarMenuState {
+        MenuBarMenuState(
+            title: menuTitle,
+            errorMessages: errorMessages,
+            isPreviewEnabled: !folderPaths.isEmpty,
+            isRotationActive: isRotationActive,
+            isRotationControlDisabled: isRotationControlDisabled,
+            intervalMinutes: intervalMinutes,
+            rotationAction: rotationAction,
+            themes: themes.map { MenuBarTheme(id: $0.id, title: themeLabel($0)) },
+            selectedThemeID: selectedThemeID,
+            recentWallpapers: displayedRecentWallpapers.map { path in
+                MenuBarRecentWallpaper(
+                    path: path,
+                    title: (path as NSString).lastPathComponent,
+                    isCurrent: path == currentWallpaper,
+                    isEnabled: canApplyRecentWallpaper(path)
+                )
+            },
+            allSpaces: allSpaces,
+            matchSystemAppearance: matchSystemAppearance
+        )
+    }
+
     func shuffle() {
         appState.shuffleWallpaper()
     }

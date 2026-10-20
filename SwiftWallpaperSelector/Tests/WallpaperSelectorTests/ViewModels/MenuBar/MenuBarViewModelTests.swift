@@ -172,6 +172,36 @@ final class MenuBarViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.canApplyRecentWallpaper(gone.path))
     }
 
+    /// The state of the menu is built from the view model, so the menu
+    /// shows what the view model knows.
+    func testTheMenuStateFollowsTheViewModel() throws {
+        let folderURL = try makeFolder(named: "menu-state-images", images: ["there.png"])
+        let there = folderURL.appendingPathComponent("there.png")
+        let gone = folderURL.appendingPathComponent("gone.png")
+        settingsManager.update { settings in
+            settings.wallpaperHistory = [there.path, gone.path]
+            settings.currentWallpaper = there.path
+        }
+
+        let state = viewModel.menuState
+
+        XCTAssertEqual(state.title, "All Folders")
+        XCTAssertTrue(state.isPreviewEnabled)
+        XCTAssertEqual(state.recentWallpapers.count, 2)
+        XCTAssertEqual(state.recentWallpapers[0].title, "there.png")
+        XCTAssertTrue(state.recentWallpapers[0].isCurrent)
+        XCTAssertTrue(state.recentWallpapers[0].isEnabled)
+        XCTAssertFalse(state.recentWallpapers[1].isEnabled)
+    }
+
+    /// The rotation cannot run while the appearance is matched, so the menu
+    /// greys the item out.
+    func testTheMenuStateDisablesTheRotationWhileTheAppearanceIsMatched() {
+        appState.updateSettings { $0.matchSystemAppearance = true }
+
+        XCTAssertTrue(viewModel.menuState.isRotationControlDisabled)
+    }
+
     private func makeFolder(named name: String, images: [String]) throws -> URL {
         let folderURL = settingsContext.directory(named: name)
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
