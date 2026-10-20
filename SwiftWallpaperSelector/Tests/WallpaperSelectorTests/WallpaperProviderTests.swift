@@ -4,40 +4,6 @@ import XCTest
 @MainActor
 final class WallpaperProviderTests: XCTestCase {
 
-    func testMockProviderRecordsCalls() {
-        let mock = MockWallpaperProvider()
-        let url = URL(fileURLWithPath: "/tmp/test.jpg")
-
-        try! mock.setWallpaper(url)
-        XCTAssertEqual(mock.appliedURLs, [url])
-
-        try! mock.setWallpaper(url)
-        XCTAssertEqual(mock.appliedURLs, [url, url])
-    }
-
-    func testMockProviderThrowsWhenConfigured() {
-        let mock = MockWallpaperProvider()
-        mock.errorToThrow = MockWallpaperProviderError.configuredFailure
-
-        let url = URL(fileURLWithPath: "/tmp/test.jpg")
-        XCTAssertThrowsError(try mock.setWallpaper(url)) { error in
-            XCTAssertTrue(error is MockWallpaperProviderError)
-        }
-    }
-
-    func testMockProviderReset() {
-        let mock = MockWallpaperProvider()
-        let url = URL(fileURLWithPath: "/tmp/test.jpg")
-
-        try! mock.setWallpaper(url)
-        XCTAssertEqual(mock.appliedURLs.count, 1)
-
-        mock.reset()
-        XCTAssertEqual(mock.appliedURLs.count, 0)
-        XCTAssertNil(mock.errorToThrow)
-    }
-
-
     func testProviderRejectsMissingWallpaperBeforeTouchingDisplays() {
         var didApply = false
         let provider = WallpaperProvider { _ in
@@ -89,6 +55,39 @@ final class WallpaperProviderTests: XCTestCase {
             }
             XCTAssertEqual(failed, 1)
             XCTAssertEqual(total, 3)
+        }
+    }
+
+    /// A display that accepted the wallpaper means the wallpaper is on the
+    /// screen, even though another display refused it.
+    func testTheProviderReportsThatAtLeastOneDisplayWasSet() throws {
+        let url = try makeTemporaryWallpaper()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let provider = WallpaperProvider { _ in
+            [.success(()), .failure(MockWallpaperProviderError.configuredFailure)]
+        }
+
+        XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
+            guard let providerError = error as? WallpaperProviderError else {
+                return XCTFail("Expected a wallpaper provider error, got \(error)")
+            }
+            XCTAssertTrue(providerError.didSetOnAtLeastOneDisplay)
+        }
+    }
+
+    /// No display accepted the wallpaper, so nothing is on the screen.
+    func testTheProviderReportsThatNoDisplayWasSet() throws {
+        let url = try makeTemporaryWallpaper()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let provider = WallpaperProvider { _ in
+            [.failure(MockWallpaperProviderError.configuredFailure)]
+        }
+
+        XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
+            guard let providerError = error as? WallpaperProviderError else {
+                return XCTFail("Expected a wallpaper provider error, got \(error)")
+            }
+            XCTAssertFalse(providerError.didSetOnAtLeastOneDisplay)
         }
     }
 

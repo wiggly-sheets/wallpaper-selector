@@ -54,6 +54,15 @@ enum WallpaperProviderError: Error, LocalizedError {
     case noScreens
     case failedToSetOnDisplays(failedCount: Int, totalCount: Int, underlying: Error)
 
+    /// The wallpaper reached at least one display, so it is on the screen
+    /// even though another display refused it.
+    var didSetOnAtLeastOneDisplay: Bool {
+        guard case .failedToSetOnDisplays(let failedCount, let totalCount, _) = self else {
+            return false
+        }
+        return failedCount < totalCount
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidWallpaper(let url):
