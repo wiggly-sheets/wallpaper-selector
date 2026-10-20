@@ -38,6 +38,19 @@ boundary of the settings IO path, so the sendability warning is gone without
 `nonisolated(unsafe)`. The CI runs the `hdiutil convert` branch of the DMG
 recipe on every push.
 
+The round after that closed three more findings. The settings file is written
+on a queue of its own, so a settings change never blocks the user interface:
+the settings in memory change right away and the file catches up. Every write
+runs on that one queue and writes the settings that are current when it runs,
+so the writes are ordered and the last one wins. A failed write is reported
+through the settings error, so it shows up on the General pane and in the menu
+bar, and the pending writes are flushed before the app quits. The file that
+is recreated after an external delete is written on the same queue, so a
+change that lands while the recreate waits is not lost. A legacy settings file
+that was imported is renamed to `settings.json.migrated`, and a legacy file
+that was never imported is reported on every launch, so it cannot be
+forgotten.
+
 ## Deferred work
 
 The tickets in `issues/` are the deliberate remainder of the audit. None of
@@ -46,13 +59,10 @@ deferred, and what "done" would look like. A ticket that will not be
 actioned is labelled `wontfix`, a ticket that needs a product decision
 `ready-for-human`, and the rest `ready-for-agent`.
 
-Six tickets are still open:
+Three tickets are still open:
 
-- 01 — the settings file write runs on the main actor
-- 04 — the legacy settings migration is skipped once a settings file exists
 - 07 — an open menu bar menu is not updated in place
 - 10 — there is no UI test harness
 - 12 — the preview popover is taller than a short display
-- 14 — a settings write can be lost in the recreate path of the external reload
 
-All six tickets are `ready-for-agent`.
+All three tickets are `ready-for-agent`.
