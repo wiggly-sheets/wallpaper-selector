@@ -48,6 +48,47 @@ final class SettingsManagerWriteTests: XCTestCase {
         )
     }
 
+    /// The settings file is deleted, so the watcher recreates it. A change
+    /// that lands while the recreate waits must not be lost: the file has to
+    /// end with the newest settings.
+    func testAWriteThatLandsDuringTheRecreateKeepsTheNewerChange() async throws {
+        let context = try TestSettingsContext()
+        let gate = WriteGate()
+        let manager = context.makeSettingsManager(beforeWrite: { gate.beforeWrite() })
+        manager.replace(WallpaperSettings(folderPaths: ["/wallpapers"]))
+        manager.flushPendingWrites()
+
+        // The settings file is deleted, so the watcher recreates it.
+        gate.pauseTheNextWrite()
+        try FileManager.default.removeItem(at: manager.settingsURL)
+
+        // The recreate waits for the write queue, so the change can land.
+        await gate.waitUntilTheWriteWaits()
+
+        manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" }
+        // The change gets the time to reach the disk before the recreate is
+        // released, so the order of the two writes is fixed.
+        _ = await waitUntil(timeout: 0.5) {
+            (try? decodeSettings(at: manager.settingsURL))?.currentWallpaper == "/wallpapers/new.jpg"
+        }
+        gate.resumeTheWrite()
+        // The file has to settle: both writes are done when it stops changing.
+        let settled = await waitUntilTheFileStopsChanging(at: manager.settingsURL)
+        XCTAssertTrue(settled, "The writes have to settle")
+        await manager.waitForPendingWrites()
+
+        XCTAssertEqual(
+            manager.settings.currentWallpaper,
+            "/wallpapers/new.jpg",
+            "The change must stay in memory"
+        )
+        XCTAssertEqual(
+            try decodeSettings(at: manager.settingsURL).currentWallpaper,
+            "/wallpapers/new.jpg",
+            "The newest settings have to be on disk"
+        )
+    }
+
     /// Waits for a condition instead of relying on a tight timeout.
     private func waitUntil(
         _ condition: () -> Bool,

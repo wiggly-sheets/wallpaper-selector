@@ -598,10 +598,8 @@ final class SettingsManager: ObservableObject {
             guard let self else { return }
             let outcome = await Self.performExternalChangeIO(
                 url: url,
-                directory: self.settingsDirectory,
                 currentSettings: { @MainActor in self.settings },
-                fileExists: self.fileExists,
-                beforeWrite: self.beforeWrite
+                fileExists: self.fileExists
             )
             guard self.settingsURL == url else { self.startFileWatcher(); return }
             let isCurrent = generation == self.externalChangeGeneration
@@ -626,10 +624,8 @@ final class SettingsManager: ObservableObject {
             guard let self else { return }
             let outcome = await Self.performExternalChangeIO(
                 url: url,
-                directory: self.settingsDirectory,
                 currentSettings: { @MainActor in self.settings },
-                fileExists: self.fileExists,
-                beforeWrite: self.beforeWrite
+                fileExists: self.fileExists
             )
             guard self.settingsURL == url, generation == self.externalChangeGeneration else { return }
             self.applyExternalChangeOutcome(outcome)
@@ -651,6 +647,9 @@ final class SettingsManager: ObservableObject {
             onSettingsChanged?()
             clearError()
         case .success(.recreated):
+            // The file is written from the settings that are current when the
+            // write runs, so a change that lands in the meantime is not lost.
+            enqueueWrite(to: settingsURL, createsDirectory: true)
             onSettingsChanged?()
             clearError()
         case .failure(let error):
@@ -665,10 +664,8 @@ final class SettingsManager: ObservableObject {
 
     private nonisolated static func performExternalChangeIO(
         url: URL,
-        directory: URL,
         currentSettings: @MainActor @Sendable () async -> WallpaperSettings,
-        fileExists: @Sendable (URL) -> Bool,
-        beforeWrite: (@Sendable () -> Void)?
+        fileExists: @Sendable (URL) -> Bool
     ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
         if fileExists(url) {
             do {
@@ -683,18 +680,9 @@ final class SettingsManager: ObservableObject {
         } else {
             // An atomic writer temporarily replaces the watched inode. If no replacement
             // arrives, the deleted file is recreated from the last known-good in-memory
-            // state.
-            do {
-                try Self.createDirectoryIfNeeded(at: directory)
-                let settings = await currentSettings()
-                beforeWrite?()
-                try Self.persist(settings, to: url)
-                return .success(.recreated)
-            } catch let error as SettingsManagerError {
-                return .failure(error)
-            } catch {
-                return .failure(.readFailed(path: url.path, reason: error.localizedDescription))
-            }
+            // state. The write runs on the write queue, so it cannot overwrite a change
+            // that landed in the meantime.
+            return .success(.recreated)
         }
     }
 
