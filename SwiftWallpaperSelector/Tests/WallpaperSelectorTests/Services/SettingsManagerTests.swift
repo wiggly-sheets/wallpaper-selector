@@ -91,6 +91,77 @@ final class SettingsManagerTests: XCTestCase {
         )
     }
 
+    /// The file in the old folder must not be left behind: it would be
+    /// adopted silently when the old folder is chosen again.
+    func testSwitchingAwayRenamesTheOldSettingsFile() throws {
+        let context = try TestSettingsContext()
+        let manager = context.makeSettingsManager()
+        let current = WallpaperSettings(folderPaths: ["/current"])
+        XCTAssertSuccess(manager.replace(current))
+        let oldURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let oldData = try Data(contentsOf: oldURL)
+        let destination = context.directory(named: "Synchronized")
+
+        try manager.relocateSettings(to: destination)
+
+        let migratedURL = context.settingsDirectory.appendingPathComponent("settings.json.migrated")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: oldURL.path),
+            "The old settings file must not be left behind"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: migratedURL),
+            oldData,
+            "The bytes of the old settings file have to survive the rename"
+        )
+    }
+
+    /// The renamed file must not be adopted when the old folder is chosen
+    /// again: the settings made in between are the current ones.
+    func testSwitchingBackDoesNotAdoptTheRenamedFile() throws {
+        let context = try TestSettingsContext()
+        let manager = context.makeSettingsManager()
+        let destination = context.directory(named: "Synchronized")
+        try manager.relocateSettings(to: destination)
+        let changed = WallpaperSettings(folderPaths: ["/changed"])
+        XCTAssertSuccess(manager.replace(changed))
+
+        try manager.relocateSettings(to: context.settingsDirectory)
+
+        XCTAssertEqual(manager.settings, changed)
+        XCTAssertEqual(
+            try decodeSettings(at: context.settingsDirectory.appendingPathComponent("settings.json")),
+            changed
+        )
+    }
+
+    /// A file that cannot be renamed stays where it is, so the failure has to
+    /// be reported: the old file would be adopted silently later.
+    func testAFailedRenameIsReported() throws {
+        let context = try TestSettingsContext()
+        let manager = SettingsManager(
+            settingsDirectory: context.settingsDirectory,
+            userDefaults: context.userDefaults,
+            defaultSettingsDirectory: context.defaultSettingsDirectory,
+            fileManager: NoMoveFileManager(),
+            migrateLegacySettings: false
+        )
+        let destination = context.directory(named: "Synchronized")
+
+        try manager.relocateSettings(to: destination)
+
+        guard case .renameFailed? = manager.lastError else {
+            return XCTFail("Expected the failed rename to be reported")
+        }
+        XCTAssertEqual(manager.settingsDirectory, destination)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: context.settingsDirectory.appendingPathComponent("settings.json").path
+            ),
+            "The old file has to stay when it cannot be renamed"
+        )
+    }
+
     func testUsingDefaultLocationAdoptsExistingSettingsAndClearsCustomLocation() throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
@@ -480,7 +551,7 @@ final class SettingsManagerTests: XCTestCase {
             settingsDirectory: context.settingsDirectory,
             userDefaults: context.userDefaults,
             defaultSettingsDirectory: context.defaultSettingsDirectory,
-            fileManager: CopyOnlyFileManager(),
+            fileManager: NoMoveFileManager(),
             migrateLegacySettings: false
         )
 
@@ -658,8 +729,9 @@ private func XCTAssertSuccess(
 }
 
 /// A file manager that cannot move a file: the quarantine falls back to a
-/// copy, so the unreadable file stays where it is.
-private final class CopyOnlyFileManager: FileManager {
+/// copy, so the unreadable file stays where it is, and the settings file
+/// cannot be renamed.
+private final class NoMoveFileManager: FileManager {
     override func moveItem(at sourceURL: URL, to destinationURL: URL) throws {
         throw CocoaError(.fileWriteFileExists)
     }

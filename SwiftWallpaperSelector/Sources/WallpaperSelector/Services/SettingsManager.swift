@@ -7,6 +7,7 @@ enum SettingsManagerError: LocalizedError, Equatable {
     case decodeFailed(path: String, reason: String)
     case encodeFailed(reason: String)
     case writeFailed(path: String, reason: String)
+    case renameFailed(path: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ enum SettingsManagerError: LocalizedError, Equatable {
             return "Could not encode settings: \(reason)"
         case let .writeFailed(path, reason):
             return "Could not save settings to \(path): \(reason)"
+        case let .renameFailed(path, reason):
+            return "Could not move the settings file at \(path) aside: \(reason)"
         }
     }
 }
@@ -269,6 +272,7 @@ final class SettingsManager: ObservableObject {
     private func switchSettingsLocation(to directory: URL, customDirectoryPath: String?) throws {
         let normalized = directory.standardizedFileURL
         let destinationURL = normalized.appendingPathComponent("settings.json")
+        let previousURL = settingsURL
 
         do {
             try Self.createDirectoryIfNeeded(at: normalized)
@@ -296,6 +300,8 @@ final class SettingsManager: ObservableObject {
             clearError()
             startFileWatcher()
             onSettingsChanged?()
+
+            movePreviousSettingsFileAside(from: previousURL)
         } catch let error as SettingsManagerError {
             report(error)
             throw error
@@ -303,6 +309,27 @@ final class SettingsManager: ObservableObject {
             let wrapped = SettingsManagerError.readFailed(path: destinationURL.path, reason: error.localizedDescription)
             report(wrapped)
             throw wrapped
+        }
+    }
+
+    /// Moves the settings file of the old folder aside.
+    ///
+    /// The file is renamed, not deleted, so its bytes survive. A file that is
+    /// left behind would be adopted silently when the old folder is chosen
+    /// again, and the settings made in between would be lost.
+    private func movePreviousSettingsFileAside(from url: URL) {
+        guard url != settingsURL, fileExists(url) else { return }
+        let migratedURL = url
+            .deletingLastPathComponent()
+            .appendingPathComponent(url.lastPathComponent + ".migrated")
+        if fileExists(migratedURL) {
+            // An older migrated file is replaced by the one of this move.
+            try? fileManager.removeItem(at: migratedURL)
+        }
+        do {
+            try fileManager.moveItem(at: url, to: migratedURL)
+        } catch {
+            report(.renameFailed(path: url.path, reason: error.localizedDescription))
         }
     }
 
