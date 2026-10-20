@@ -79,6 +79,12 @@ final class AppearanceMonitor: NSObject {
         notificationCenter.removeObserver(self)
     }
 
+    /// Applies the wallpaper of the current appearance.
+    ///
+    /// The call belongs to the moments in which the appearance context
+    /// changes: the startup, a change of the pin, the theme or the matching,
+    /// and the system appearance itself. It does not belong to the wake-up of
+    /// the app, so a wallpaper the user picked by hand stays on the screen.
     func applyAppearanceWallpaperIfNeeded() {
         applyTask?.cancel()
         applyTask = nil
@@ -101,6 +107,10 @@ final class AppearanceMonitor: NSObject {
             guard !pathsReferToSameFile(pinnedURL.path, settingsManager.settings.currentWallpaper) else {
                 return
             }
+            // The pin is a standing instruction of the user: it is enforced
+            // when the appearance changes and when the user changes the pin,
+            // the theme or the matching itself. It is not enforced when the
+            // app wakes up, so a wallpaper the user picked by hand survives.
             applyWallpaper(at: pinnedURL)
             return
         }

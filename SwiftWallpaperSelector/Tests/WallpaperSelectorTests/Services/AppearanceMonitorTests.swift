@@ -188,6 +188,41 @@ final class AppearanceMonitorTests: XCTestCase {
         XCTAssertEqual(manager.settings.currentWallpaper, fallback.path)
     }
 
+    /// The pin is a standing instruction of the user: the system appearance
+    /// changed, so the pin of the new appearance is applied.
+    @MainActor
+    func testThePinIsAppliedWhenTheAppearanceChanges() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lightPin = try makeImage(named: "light.jpg", in: directory)
+        let darkPin = try makeImage(named: "dark.jpg", in: directory)
+        let manager = makeSettingsManager(in: directory)
+        manager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            matchSystemAppearance: true,
+            allFoldersLightWallpaper: lightPin.path,
+            allFoldersDarkWallpaper: darkPin.path
+        ))
+        let appearance = MutableSystemAppearance(isDarkAppearance: false)
+        let wallpaperProvider = RecordingWallpaperProvider()
+        let monitor = AppearanceMonitor(
+            settingsManager: manager,
+            wallpaperProvider: wallpaperProvider,
+            themeProvider: ThemeProvider(settingsManager: manager),
+            appearanceProvider: appearance,
+            notificationCenter: makePrivateNotificationCenter()
+        )
+
+        monitor.applyAppearanceWallpaperIfNeeded()
+        appearance.isDarkAppearance = true
+        monitor.applyAppearanceWallpaperIfNeeded()
+
+        XCTAssertEqual(
+            wallpaperProvider.calls,
+            [lightPin.standardizedFileURL, darkPin.standardizedFileURL]
+        )
+    }
+
     @MainActor
     func testInjectedSystemAppearanceChoosesDarkPin() throws {
         let directory = try makeTemporaryDirectory()

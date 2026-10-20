@@ -121,6 +121,100 @@ final class AppCoordinatorTests: XCTestCase {
         )
         XCTAssertEqual(stored.folderPaths, ["/before-quit"])
     }
+
+    /// A wallpaper the user picked by hand has to survive the wake-up of the
+    /// app: the pin is enforced when the appearance changes, not every time
+    /// the app becomes active.
+    func testAManualPickSurvivesTheActivation() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let wallpaperProvider = MockWallpaperProvider()
+        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
+        let directory = try makeWallpaperDirectory(in: context)
+        let pin = try makeImage(named: "pin.jpg", in: directory)
+        let pick = try makeImage(named: "pick.jpg", in: directory)
+        // The pin of both appearances is the same, so the test does not
+        // depend on the appearance of the machine that runs it.
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            matchSystemAppearance: true,
+            allFoldersLightWallpaper: pin.path,
+            allFoldersDarkWallpaper: pin.path
+        ))
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: hotKeyManager,
+            injectedWallpaperProvider: wallpaperProvider,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+
+        // The pin is applied at startup.
+        wallpaperProvider.reset()
+
+        coordinator.appState.setWallpaper(pick)
+
+        XCTAssertEqual(wallpaperProvider.appliedURLs, [pick])
+
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+
+        XCTAssertEqual(
+            wallpaperProvider.appliedURLs,
+            [pick],
+            "The pin must not replace the wallpaper the user picked by hand"
+        )
+        XCTAssertEqual(settingsManager.settings.currentWallpaper, pick.path)
+    }
+
+    /// The pin is a standing instruction of the user: it is applied when the
+    /// user changes it.
+    func testChangingThePinAppliesTheNewPin() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let wallpaperProvider = MockWallpaperProvider()
+        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
+        let directory = try makeWallpaperDirectory(in: context)
+        let pin = try makeImage(named: "pin.jpg", in: directory)
+        let newPin = try makeImage(named: "new-pin.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            matchSystemAppearance: true,
+            allFoldersLightWallpaper: pin.path,
+            allFoldersDarkWallpaper: pin.path
+        ))
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: hotKeyManager,
+            injectedWallpaperProvider: wallpaperProvider,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+        wallpaperProvider.reset()
+        let applied = expectation(description: "the new pin is applied")
+        coordinator.appearanceMonitor.onAppearanceChanged = { path in
+            if path == newPin.standardizedFileURL.path { applied.fulfill() }
+        }
+
+        coordinator.appState.updateSettings {
+            $0.allFoldersLightWallpaper = newPin.path
+            $0.allFoldersDarkWallpaper = newPin.path
+        }
+        await fulfillment(of: [applied], timeout: 2)
+
+        XCTAssertEqual(wallpaperProvider.appliedURLs, [newPin.standardizedFileURL])
+    }
+
+    private func makeWallpaperDirectory(in context: TestSettingsContext) throws -> URL {
+        let directory = context.directory(named: "wallpapers")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func makeImage(named name: String, in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent(name)
+        try Data("image".utf8).write(to: url)
+        return url
+    }
 }
 
 /// Records the shortcuts the coordinator asks for without registering a real

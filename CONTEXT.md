@@ -53,6 +53,9 @@ The light pin of the Appearance sheet is stored in the theme that the system use
 **Appearance matching pauses the timer and the theme actions.**
 While Appearance Matching is on, the rotation timer and the theme actions (shuffle theme, next theme, previous theme) are paused. A manual shuffle, next or previous is still allowed. It stays inside the matched collection, the folders of the effective theme, and it only ignores the exact-image pin. The theme actions are blocked because a theme action would show one theme and the wallpaper of another one.
 
+**A pinned wallpaper is a standing instruction, not a wake-up rule.**
+While Appearance Matching is on, the pinned wallpaper of the current appearance is applied when the system changes appearance, and when the user changes the pin, the theme or the matching itself. It is not applied when the app only wakes up, so a wallpaper the user picked by hand stays on the screen.
+
 **A wallpaper picked by hand waits for a running rotation.**
 A wallpaper picked by hand while a rotation is running waits for the rotation to finish. A second pick replaces the first one - the last pick wins. Only one pick is kept, so the wallpaper of the last pick is applied when the rotation is done. The wait is reported through the wallpaper error, so the user knows why the wallpaper did not change yet. While the pick waits, the deferral notice is what the user sees: a failure that is reported in that window is not shown, and the outcome of the pick is reported when the pick is applied.
 

@@ -5,7 +5,7 @@ import Foundation
 @MainActor
 final class AppCoordinator: ObservableObject {
     let settingsManager: SettingsManager
-    let wallpaperProvider: WallpaperProvider
+    let wallpaperProvider: WallpaperSetting
     let themeProvider: ThemeProvider
     let rotationService: RotationService
     let appearanceMonitor: AppearanceMonitor
@@ -26,9 +26,10 @@ final class AppCoordinator: ObservableObject {
     init(
         settingsManager: SettingsManager,
         injectedHotKeyManager: HotKeyManager?,
+        injectedWallpaperProvider: WallpaperSetting? = nil,
         startsMenuBar: Bool
     ) {
-        let wallpaperProvider = WallpaperProvider()
+        let wallpaperProvider = injectedWallpaperProvider ?? WallpaperProvider()
         let themeProvider = ThemeProvider(settingsManager: settingsManager)
         let rotationService = RotationService(
             settingsManager: settingsManager,
@@ -161,7 +162,10 @@ final class AppCoordinator: ObservableObject {
     }
 
     @objc private func handleDidBecomeActive() {
-        appearanceMonitor.applyAppearanceWallpaperIfNeeded()
+        // The wallpaper of the appearance is not applied here: the pin is
+        // enforced when the appearance changes and when the user changes the
+        // pin, the theme or the matching. A wallpaper the user picked by hand
+        // has to survive the wake-up of the app.
         // The app that owned the shortcut may have quit: registering again
         // takes the shortcut back. A successful registration reports no error,
         // so the error item disappears on its own.

@@ -136,6 +136,11 @@ the Settings window. The theme actions in the Rotate submenu are disabled in
 the same state, because a theme action would show one theme and the wallpaper
 of another one.
 
+While Match System Appearance is on, the pinned wallpaper of the current
+appearance is applied when the system changes appearance, and when the pin,
+the theme or the matching itself changes. It is not applied when the app
+only wakes up: a wallpaper picked by hand stays on the screen.
+
 The theme buttons in the preview window are enabled whenever a theme exists
 and Match System Appearance is off; the rotation interval does not matter
 for them. The wallpaper buttons in the auto-rotate row of that window need
