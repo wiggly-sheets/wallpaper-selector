@@ -53,7 +53,10 @@ and dark appearance choose different wallpapers.
 
 ### Homebrew
 
-Homebrew cask publishing is being prepared. After first public release:
+The cask lives in the
+[wiggly-sheets/homebrew-tap](https://github.com/wiggly-sheets/homebrew-tap)
+repository. The tap renders the cask from its own template and follows the
+latest stable release.
 
 ```bash
 brew install --cask wiggly-sheets/tap/wallpaper-selector
@@ -125,5 +128,7 @@ or usage data.
 ## Releases and Homebrew
 
 Pushing tag `vX.Y.Z` runs release workflow, builds DMG plus SHA-256 checksum,
-and publishes GitHub release. Cask template and publish notes live in
-[Homebrew](Homebrew/README.md).
+and publishes GitHub release. The
+[wiggly-sheets/homebrew-tap](https://github.com/wiggly-sheets/homebrew-tap)
+repository renders its own cask from its own template and follows the latest
+stable release, so a release needs no manual copy into the tap.
