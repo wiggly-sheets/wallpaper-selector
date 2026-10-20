@@ -66,10 +66,14 @@ final class TestSettingsContext {
     }
 
     /// A manager that migrates the settings of the given legacy file.
-    func makeSettingsManagerMigratingLegacySettings(from legacyURL: URL) -> SettingsManager {
+    func makeSettingsManagerMigratingLegacySettings(
+        from legacyURL: URL,
+        fileManager: FileManager = .default
+    ) -> SettingsManager {
         SettingsManager(
             userDefaults: userDefaults,
             defaultSettingsDirectory: defaultSettingsDirectory,
+            fileManager: fileManager,
             migrateLegacySettings: true,
             legacySettingsURL: legacyURL
         )

@@ -238,11 +238,15 @@ outside the app.
 When no `settings.json` exists yet, the app imports the settings from the
 older `~/.wallpaper-selector/settings.json` location. After a successful
 import the legacy file is renamed to `settings.json.migrated` next to it, and
-its bytes are kept. A legacy file that is still there on a later launch is not
-imported again: the app reports it on the General pane and keeps the file, so
-you can import it by hand. If the legacy file cannot be read, the app reports
-the error on the General pane and keeps the file, so you can recover it by
-hand.
+its bytes are kept. If that rename fails, for example because the folder is
+read-only, the app reports that the legacy settings were imported but the
+legacy file could not be moved aside, and the file stays. A legacy file that
+is still there on a later launch is not imported again: when it holds the
+settings the app already has, the import already happened, so the file is
+moved aside now. When it holds other settings, the app reports it on the
+General pane and keeps the file, so you can import it by hand. If the legacy
+file cannot be read, the app reports the error on the General pane and keeps
+the file, so you can recover it by hand.
 
 A folder path in the file is always absolute. A relative path is resolved
 against your home directory and a `~` is expanded. A path of `.` or `..` is

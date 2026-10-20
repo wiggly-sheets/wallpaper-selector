@@ -9,6 +9,7 @@ enum SettingsManagerError: LocalizedError, Equatable {
     case writeFailed(path: String, reason: String)
     case renameFailed(path: String, reason: String)
     case legacySettingsNotImported(path: String)
+    case legacySettingsNotMoved(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +29,9 @@ enum SettingsManagerError: LocalizedError, Equatable {
             return "A legacy settings file was found at \(path) and was not imported, "
                 + "because a newer settings file already exists. The legacy file was left "
                 + "in place, so you can import it by hand."
+        case let .legacySettingsNotMoved(path):
+            return "The legacy settings were imported, but the legacy file could not be "
+                + "moved aside: \(path)"
         }
     }
 }
@@ -251,22 +255,24 @@ final class SettingsManager: ObservableObject {
                 legacyURL = candidate
             }
 
-            if legacyURL != nil, fileExists(settingsURL) {
-                // A newer settings file exists: the legacy file is never
-                // imported over it. The file stays, so the user can import it
-                // by hand, and the message stays visible.
-                let notice = SettingsManagerError.legacySettingsNotImported(path: legacyURL!.path)
-                legacySettingsNotice = notice
-                report(notice)
-            }
-
             if fileExists(settingsURL) {
                 do {
                     let loaded = try Self.loadSettings(from: settingsURL)
                     publish(loaded)
                     // The file holds the settings that were loaded.
                     lastKnownOnDisk.value = loaded
+                    if let legacyURL {
+                        // A settings file exists: the legacy file is never
+                        // imported over it. The content tells whether the
+                        // import already happened.
+                        reportLegacyFileBesideTheSettingsFile(legacyURL, loadedSettings: loaded)
+                    }
                 } catch let error as SettingsManagerError {
+                    if let legacyURL {
+                        // The settings file cannot be read, so the app cannot
+                        // tell whether the legacy file was imported.
+                        reportLegacyFileBesideTheSettingsFile(legacyURL, loadedSettings: nil)
+                    }
                     // The unreadable file is the only copy of the user's folders,
                     // themes and history: keep it before anything can overwrite it.
                     let quarantined = quarantineUnreadableFile(at: settingsURL)
@@ -351,6 +357,68 @@ final class SettingsManager: ObservableObject {
         }
     }
 
+    /// Reports a legacy file that is next to a settings file.
+    ///
+    /// The legacy file is only imported when no settings file exists, so a
+    /// legacy file that is still there was either never imported, or it was
+    /// imported and could not be moved aside. The content tells the two
+    /// apart: a legacy file that holds the settings of the app was already
+    /// imported.
+    private func reportLegacyFileBesideTheSettingsFile(
+        _ legacyURL: URL,
+        loadedSettings: WallpaperSettings?
+    ) {
+        if let loadedSettings,
+           let legacySettings = try? Self.loadSettings(from: legacyURL),
+           legacySettings == loadedSettings {
+            // The import already happened. The file is moved aside now, so
+            // the next launch does not see it again.
+            moveLegacyFileAside(legacyURL)
+            return
+        }
+        // The legacy file was not imported: it holds other settings or it
+        // cannot be read at all. The file stays, so the user can import it
+        // by hand, and the message stays visible.
+        let notice = SettingsManagerError.legacySettingsNotImported(path: legacyURL.path)
+        legacySettingsNotice = notice
+        report(notice)
+    }
+
+    /// Moves the legacy file aside, so the next launch does not import it again.
+    ///
+    /// The file is renamed, not deleted, so its bytes survive.
+    private func moveLegacyFileAside(_ legacyURL: URL) {
+        switch Self.renameLegacyFile(legacyURL, fileManager: fileManager) {
+        case .success:
+            break
+        case .failure(let error):
+            report(error)
+        }
+    }
+
+    /// Renames the legacy file, so the next launch does not import it again.
+    ///
+    /// The file is renamed, not deleted, so its bytes survive.
+    nonisolated private static func renameLegacyFile(
+        _ legacyURL: URL,
+        fileManager: FileManager
+    ) -> Result<Void, SettingsManagerError> {
+        let migratedURL = legacyURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(legacyURL.lastPathComponent + ".migrated")
+        do {
+            if fileManager.fileExists(atPath: migratedURL.path) {
+                // An older migrated file is replaced by the one of this move.
+                try? fileManager.removeItem(at: migratedURL)
+            }
+            try fileManager.moveItem(at: legacyURL, to: migratedURL)
+            return .success(())
+        } catch {
+            // The settings were imported, only the move aside failed.
+            return .failure(.legacySettingsNotMoved(path: legacyURL.path))
+        }
+    }
+
     /// Imports the legacy settings file.
     ///
     /// The write and the rename run on the write queue, so the import cannot
@@ -375,18 +443,11 @@ final class SettingsManager: ObservableObject {
             return .failure(error)
         }
 
-        let migratedURL = legacyURL
-            .deletingLastPathComponent()
-            .appendingPathComponent(legacyURL.lastPathComponent + ".migrated")
-        do {
-            if fileManager.fileExists(atPath: migratedURL.path) {
-                // An older migrated file is replaced by the one of this import.
-                try? fileManager.removeItem(at: migratedURL)
-            }
-            try fileManager.moveItem(at: legacyURL, to: migratedURL)
+        switch renameLegacyFile(legacyURL, fileManager: fileManager) {
+        case .success:
             return .success(written)
-        } catch {
-            return .failure(.renameFailed(path: legacyURL.path, reason: error.localizedDescription))
+        case .failure(let error):
+            return .failure(error)
         }
     }
 
@@ -824,6 +885,11 @@ final class SettingsManager: ObservableObject {
 
 
     private func report(_ error: SettingsManagerError) {
+        if case .legacySettingsNotMoved = error {
+            // The legacy file is still on the disk, so the message has to stay
+            // visible: the user has to know the file is there.
+            legacySettingsNotice = error
+        }
         lastError = error
         onError?(error)
         print("[SettingsManager] \(error.localizedDescription)")
