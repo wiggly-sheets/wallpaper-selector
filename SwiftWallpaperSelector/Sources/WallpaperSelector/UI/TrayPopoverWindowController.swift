@@ -5,6 +5,14 @@ extension Notification.Name {
     static let OpenMainWindowRequested = Notification.Name("OpenMainWindowRequested")
 }
 
+/// A borderless window that can become the key window.
+///
+/// AppKit refuses the key status for a window without a title bar, so the
+/// popover would never learn that it lost the key.
+final class PopoverWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+}
+
 @MainActor
 final class TrayPopoverWindowController: NSWindowController {
     private var statusItem: NSStatusItem?
@@ -26,7 +34,7 @@ final class TrayPopoverWindowController: NSWindowController {
         materialView.material = .popover
         materialView.blendingMode = .behindWindow
         materialView.state = .active
-        let window = NSWindow(
+        let window = PopoverWindow(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 528),
             styleMask: [.borderless],
             backing: .buffered,
@@ -36,8 +44,8 @@ final class TrayPopoverWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.level = .floating
-        window.backgroundColor = .windowBackgroundColor
-        window.isOpaque = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
         window.hasShadow = true
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -66,7 +74,7 @@ final class TrayPopoverWindowController: NSWindowController {
         )
     }
 
-    isolated deinit {
+    deinit {
         if let globalMouseMonitor {
             NSEvent.removeMonitor(globalMouseMonitor)
         }
@@ -78,29 +86,77 @@ final class TrayPopoverWindowController: NSWindowController {
 
 
     override func showWindow(_ sender: Any?) {
-        super.showWindow(sender)
-
         let width = 300.0
         let height = 528.0
         let screen = statusItem?.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
         guard let screenFrame = screen?.visibleFrame else { return }
 
+        // The vertical anchor comes from the screen: the status item window
+        // frame is stale when displays of different heights are connected.
         let origin: CGPoint
-        if let buttonFrame = statusItem?.button?.window?.frame {
-            origin = CGPoint(x: buttonFrame.midX - width / 2, y: buttonFrame.minY - height - 4)
+        if let button = statusItem?.button, let buttonWindow = button.window {
+            // The status item window covers the whole display, so the icon
+            // itself is the anchor.
+            origin = Self.origin(
+                for: button,
+                in: buttonWindow,
+                screenFrame: screenFrame,
+                width: width,
+                height: height
+            )
         } else {
             origin = CGPoint(x: screenFrame.maxX - width, y: screenFrame.maxY - height)
         }
 
-        let clampedX = min(max(origin.x, screenFrame.minX), screenFrame.maxX - width)
-        let clampedY = min(max(origin.y, screenFrame.minY), screenFrame.maxY - height)
-        window?.setFrameOrigin(CGPoint(x: clampedX, y: clampedY))
+        let clamped = Self.clampedOrigin(
+            origin,
+            in: screenFrame,
+            width: width,
+            height: height
+        )
+        // The frame is set before the window is ordered in, so the popover
+        // does not flash in the corner of the screen.
+        window?.setFrameOrigin(clamped)
 
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         installOutsideClickMonitors()
     }
 
+
+    /// The origin of the popover: below the status item icon.
+    ///
+    /// The status item window covers the whole display, so the icon itself is
+    /// the anchor. The window of the icon gives the position on the screen.
+    static func origin(
+        for button: NSView,
+        in window: NSWindow,
+        screenFrame: CGRect,
+        width: CGFloat,
+        height: CGFloat
+    ) -> CGPoint {
+        let inWindow = button.convert(button.bounds, to: nil)
+        let onScreen = window.convertToScreen(inWindow)
+        return CGPoint(x: onScreen.midX - width / 2, y: screenFrame.maxY - height)
+    }
+
+    /// The origin of the popover inside the visible frame of the display.
+    ///
+    /// A display that is shorter or narrower than the popover has no room
+    /// for it. The upper bound must never fall below the lower bound then,
+    /// because the smaller of the two would be picked and the popover would
+    /// hang off the bottom or off the right edge of the display.
+    static func clampedOrigin(
+        _ origin: CGPoint,
+        in screenFrame: CGRect,
+        width: CGFloat,
+        height: CGFloat
+    ) -> CGPoint {
+        // shortcut: the height of the popover is fixed at 528 pt, upgrade when a display shorter than the popover has to be supported
+        let clampedX = min(max(origin.x, screenFrame.minX), max(screenFrame.minX, screenFrame.maxX - width))
+        let clampedY = min(max(origin.y, screenFrame.minY), max(screenFrame.minY, screenFrame.maxY - height))
+        return CGPoint(x: clampedX, y: clampedY)
+    }
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === self.window else { return }
