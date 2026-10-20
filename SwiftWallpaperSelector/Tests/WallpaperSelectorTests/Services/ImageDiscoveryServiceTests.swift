@@ -30,11 +30,76 @@ final class ImageDiscoveryServiceTests: XCTestCase {
         XCTAssertEqual(result.map { $0.standardizedFileURL }, expected.map { $0.standardizedFileURL }, "ImageDiscoveryService should return only supported image files")
     }
 
+    func testCollectImageURLsSkipsDirectoriesNamedLikeImages() throws {
+        let folder = try createTempFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        try createFile(at: folder, name: "real.png")
+        try FileManager.default.createDirectory(
+            at: folder.appendingPathComponent("looks-like-an-image.png"),
+            withIntermediateDirectories: true
+        )
+
+        let result = ImageDiscoveryService.collectImageURLs(from: [folder.path])
+
+        XCTAssertEqual(
+            result.map { $0.lastPathComponent },
+            ["real.png"],
+            "A directory that is named like an image is not a wallpaper"
+        )
+    }
+
     func testCollectImageURLsHandlesEmptyFolder() throws {
         let folder = try createTempFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let result = ImageDiscoveryService.collectImageURLs(from: [folder.path])
         XCTAssertTrue(result.isEmpty, "Empty folder should produce an empty result array")
+    }
+
+    /// Overlapping folders must not list the same file twice.
+    func testCollectImageURLsSkipsAFileThatWasAlreadyCollected() throws {
+        let folder = try createTempFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        try createFile(at: folder, name: "a.png")
+        try createFile(at: folder, name: "b.png")
+
+        let result = ImageDiscoveryService.collectImageURLs(from: [folder.path, folder.path + "/"])
+
+        XCTAssertEqual(
+            result.map { $0.lastPathComponent },
+            ["a.png", "b.png"],
+            "A file that was already collected must not be listed twice"
+        )
+    }
+
+    /// Two folders that reach the same file through a symlink are the same
+    /// file: it must not be listed twice.
+    func testCollectImageURLsSkipsAFileThatWasAlreadyCollectedThroughASymlink() throws {
+        let folder = try createTempFolder()
+        let linkedFolder = try createTempFolder()
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: linkedFolder)
+        }
+
+        try createFile(at: folder, name: "a.png")
+        try createFile(at: folder, name: "b.png")
+        // The second folder reaches the same files through a symlink.
+        for name in ["a.png", "b.png"] {
+            try FileManager.default.createSymbolicLink(
+                at: linkedFolder.appendingPathComponent(name),
+                withDestinationURL: folder.appendingPathComponent(name)
+            )
+        }
+
+        let result = ImageDiscoveryService.collectImageURLs(from: [folder.path, linkedFolder.path])
+
+        XCTAssertEqual(
+            result.map { $0.lastPathComponent },
+            ["a.png", "b.png"],
+            "A file that was already collected through a symlink must not be listed twice"
+        )
     }
 
     func testCollectImageURLsMergesMultipleFolders() throws {
