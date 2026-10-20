@@ -169,8 +169,36 @@ final class AppState: ObservableObject {
     func refreshDerivedState() {
         effectiveFolders = themeProvider.effectiveFolders()
         currentWallpaperURL = settings.currentWallpaper.map(URL.init(fileURLWithPath:))
+        let allFolders = settings.folderPaths
+        guard effectiveFolders != allFolders else {
+            // The effective scope is the global folder list: one load serves
+            // both lists, so the folders are not read from disk twice.
+            refreshSharedImages(for: allFolders)
+            return
+        }
         refreshImages(for: effectiveFolders)
-        refreshAllFolderImages(for: settings.folderPaths)
+        refreshAllFolderImages(for: allFolders)
+    }
+
+    /// Loads the images of the global folder list once and uses them for both
+    /// lists, because the effective scope is that list.
+    private func refreshSharedImages(for folders: [String]) {
+        imageLoadTask?.cancel()
+        allFolderImageLoadTask?.cancel()
+        guard !folders.isEmpty else {
+            currentThemeImages = []
+            allFolderImages = []
+            return
+        }
+
+        imageLoadTask = Task { [weak self, wallpaperLibrary] in
+            let images = await wallpaperLibrary.imageURLs(in: folders)
+            guard !Task.isCancelled, let self,
+                  self.effectiveFolders == folders, self.settings.folderPaths == folders
+            else { return }
+            self.currentThemeImages = images
+            self.allFolderImages = images
+        }
     }
 
     private func refreshImages(for folders: [String]) {

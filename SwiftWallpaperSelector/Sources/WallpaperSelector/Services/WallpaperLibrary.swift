@@ -11,7 +11,12 @@ actor WallpaperLibrary {
     private var cachedFingerprints: [FolderFingerprint] = []
     private var cachedURLs: [URL] = []
 
+    /// Counts how often the image list was loaded. A test uses it to prove
+    /// that the app does not ask for the same list twice.
+    private(set) var loadCount = 0
+
     func imageURLs(in folders: [String]) -> [URL] {
+        loadCount += 1
         let fingerprints = folders.map { path in
             let attributes = try? FileManager.default.attributesOfItem(atPath: path)
             return FolderFingerprint(

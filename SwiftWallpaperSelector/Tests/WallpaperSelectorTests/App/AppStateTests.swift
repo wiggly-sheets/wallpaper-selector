@@ -173,6 +173,42 @@ final class AppStateTests: XCTestCase {
         )
     }
 
+    /// The effective scope is the global folder list most of the time: the
+    /// image list must then be loaded once, not twice.
+    func testTheImageListIsLoadedOnceWhenTheScopeIsTheGlobalFolderList() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let themeProvider = ThemeProvider(settingsManager: settingsManager)
+        let library = WallpaperLibrary()
+        let appState = AppState(
+            settingsManager: settingsManager,
+            rotationService: RotationService(
+                settingsManager: settingsManager,
+                wallpaperProvider: MockWallpaperProvider(),
+                themeProvider: themeProvider,
+                wallpaperLibrary: WallpaperLibrary()
+            ),
+            themeProvider: themeProvider,
+            wallpaperLibrary: library
+        )
+
+        let folder = context.directory(named: "wallpapers")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data().write(to: folder.appendingPathComponent("a.png"))
+
+        settingsManager.update { $0.folderPaths = [folder.path] }
+
+        let deadline = Date().addingTimeInterval(10)
+        while appState.currentThemeImages.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertEqual(appState.currentThemeImages.count, 1)
+        XCTAssertEqual(appState.allFolderImages, appState.currentThemeImages)
+        let loads = await library.loadCount
+        XCTAssertEqual(loads, 1, "The image list must be loaded once when both scopes are the same")
+    }
+
     /// The wallpaper error lives in the rotation service, so a settings
     /// change has to clear it there: the folder the user adds may have
     /// resolved the problem that caused it.
