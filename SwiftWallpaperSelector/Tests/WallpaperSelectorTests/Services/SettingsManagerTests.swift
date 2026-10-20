@@ -576,25 +576,25 @@ final class SettingsManagerTests: XCTestCase {
     /// reload started.
     func testTheRecreatedFileKeepsTheChangeThatLandedDuringTheReload() async throws {
         let context = try TestSettingsContext()
-        let fileManager = PausingFileManager()
+        let fileCheck = MissingFileCheck()
         let manager = SettingsManager(
             settingsDirectory: context.settingsDirectory,
             userDefaults: context.userDefaults,
             defaultSettingsDirectory: context.defaultSettingsDirectory,
-            fileManager: fileManager,
+            fileExists: { url in fileCheck.fileExists(url) },
             migrateLegacySettings: false
         )
         XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/wallpapers"])))
 
         // The next check for the deleted file pauses the reload.
-        fileManager.pauseOnMissingFile()
+        fileCheck.pauseOnMissingFile()
         try FileManager.default.removeItem(at: manager.settingsURL)
 
-        await fileManager.waitUntilChecked()
+        await fileCheck.waitUntilChecked()
 
         // The change of the rotation timer lands while the reload runs.
         XCTAssertSuccess(manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" })
-        fileManager.resumeTheReload()
+        fileCheck.resumeTheReload()
 
         let settled = await waitUntilTheFileStopsChanging(at: manager.settingsURL)
         XCTAssertTrue(settled, "The reload should finish")
@@ -665,9 +665,9 @@ private final class CopyOnlyFileManager: FileManager {
     }
 }
 
-/// A file manager that pauses the check for a settings file that was deleted
-/// externally, so a test can change the settings while the reload runs.
-private final class PausingFileManager: FileManager {
+/// Pauses the check for a settings file that was deleted externally, so a
+/// test can change the settings while the reload runs.
+private final class MissingFileCheck: @unchecked Sendable {
     private let lock = NSLock()
     private var pausesOnMissingFile = false
     private var isChecked = false
@@ -681,8 +681,9 @@ private final class PausingFileManager: FileManager {
         lock.unlock()
     }
 
-    override func fileExists(atPath path: String) -> Bool {
-        let exists = super.fileExists(atPath: path)
+    /// The check that the manager uses for the settings file.
+    func fileExists(_ url: URL) -> Bool {
+        let exists = FileManager.default.fileExists(atPath: url.path)
         lock.lock()
         let shouldPause = pausesOnMissingFile && !exists
         pausesOnMissingFile = false

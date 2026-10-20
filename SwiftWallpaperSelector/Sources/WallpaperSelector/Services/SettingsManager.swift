@@ -73,6 +73,13 @@ final class SettingsManager: ObservableObject {
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var pendingExternalChangeTask: Task<Void, Never>?
     private let fileManager: FileManager
+    /// Checks whether a file exists.
+    ///
+    /// The check is a closure and not the file manager, because the IO path
+    /// runs outside the main actor: a file manager must not cross that
+    /// boundary. The closure is also the seam a test uses to pause the check
+    /// for a file that was deleted externally.
+    private let fileExists: @Sendable (URL) -> Bool
     private let queue = DispatchQueue(label: "com.wallpaper-selector.settings", qos: .utility)
     private let userDefaults: UserDefaults
     private let configuredDefaultSettingsDirectory: URL
@@ -105,10 +112,12 @@ final class SettingsManager: ObservableObject {
         userDefaults: UserDefaults = .standard,
         defaultSettingsDirectory: URL = SettingsManager.defaultSettingsDirectory,
         fileManager: FileManager = .default,
+        fileExists: (@Sendable (URL) -> Bool)? = nil,
         migrateLegacySettings: Bool = true,
         legacySettingsURL: URL? = SettingsManager.defaultLegacySettingsURL
     ) {
         self.fileManager = fileManager
+        self.fileExists = fileExists ?? { url in FileManager.default.fileExists(atPath: url.path) }
         self.userDefaults = userDefaults
         self.configuredDefaultSettingsDirectory = defaultSettingsDirectory.standardizedFileURL
         self.migrateLegacySettings = migrateLegacySettings
@@ -178,11 +187,11 @@ final class SettingsManager: ObservableObject {
 
     private func prepareInitialSettings(shouldMigrateLegacy: Bool) {
         do {
-            try Self.createDirectoryIfNeeded(at: settingsDirectory, using: fileManager)
+            try Self.createDirectoryIfNeeded(at: settingsDirectory)
 
             if shouldMigrateLegacy,
                migrateLegacySettings,
-               !fileManager.fileExists(atPath: settingsURL.path) {
+               !fileExists(settingsURL) {
                 switch loadLegacySettingsIfAvailable() {
                 case .migrated(let migrated):
                     try Self.persist(migrated, to: settingsURL)
@@ -198,13 +207,13 @@ final class SettingsManager: ObservableObject {
                 }
             }
 
-            if fileManager.fileExists(atPath: settingsURL.path) {
+            if fileExists(settingsURL) {
                 do {
                     settingsSubject.send(try Self.loadSettings(from: settingsURL))
                 } catch let error as SettingsManagerError {
                     // The unreadable file is the only copy of the user's folders,
                     // themes and history: keep it before anything can overwrite it.
-                    let quarantined = Self.quarantineUnreadableFile(at: settingsURL, using: fileManager)
+                    let quarantined = quarantineUnreadableFile(at: settingsURL)
                     report(error)
                     // A fresh default file takes its place, so the watcher can run.
                     // Without a safe copy the unreadable file has to stay.
@@ -236,7 +245,7 @@ final class SettingsManager: ObservableObject {
 
     private func loadLegacySettingsIfAvailable() -> LegacySettings {
         guard let legacyURL = legacySettingsURL else { return .none }
-        guard fileManager.fileExists(atPath: legacyURL.path) else { return .none }
+        guard fileExists(legacyURL) else { return .none }
 
         do {
             let settings = try Self.loadSettings(from: legacyURL)
@@ -262,10 +271,10 @@ final class SettingsManager: ObservableObject {
         let destinationURL = normalized.appendingPathComponent("settings.json")
 
         do {
-            try Self.createDirectoryIfNeeded(at: normalized, using: fileManager)
+            try Self.createDirectoryIfNeeded(at: normalized)
 
             let destinationSettings: WallpaperSettings
-            if fileManager.fileExists(atPath: destinationURL.path) {
+            if fileExists(destinationURL) {
                 // Adopting a synchronized folder must never overwrite its existing settings.
                 destinationSettings = try Self.loadSettings(from: destinationURL)
             } else {
@@ -297,9 +306,9 @@ final class SettingsManager: ObservableObject {
         }
     }
 
-    private nonisolated static func createDirectoryIfNeeded(at directory: URL, using fileManager: FileManager) throws {
+    private nonisolated static func createDirectoryIfNeeded(at directory: URL) throws {
         do {
-            try fileManager.createDirectory(
+            try FileManager.default.createDirectory(
                 at: directory,
                 withIntermediateDirectories: true,
                 attributes: nil
@@ -318,7 +327,7 @@ final class SettingsManager: ObservableObject {
     /// Returns `true` when the unreadable content is stored at the `.corrupt`
     /// path. The caller must not overwrite the unreadable file when it is
     /// `false`.
-    private nonisolated static func quarantineUnreadableFile(at url: URL, using fileManager: FileManager) -> Bool {
+    private func quarantineUnreadableFile(at url: URL) -> Bool {
         let corruptURL = url
             .deletingLastPathComponent()
             .appendingPathComponent(url.lastPathComponent + ".corrupt")
@@ -420,7 +429,7 @@ final class SettingsManager: ObservableObject {
                 url: url,
                 directory: self.settingsDirectory,
                 currentSettings: { @MainActor in self.settings },
-                fileManager: self.fileManager
+                fileExists: self.fileExists
             )
             guard self.settingsURL == url else { self.startFileWatcher(); return }
             let isCurrent = generation == self.externalChangeGeneration
@@ -447,7 +456,7 @@ final class SettingsManager: ObservableObject {
                 url: url,
                 directory: self.settingsDirectory,
                 currentSettings: { @MainActor in self.settings },
-                fileManager: self.fileManager
+                fileExists: self.fileExists
             )
             guard self.settingsURL == url, generation == self.externalChangeGeneration else { return }
             self.applyExternalChangeOutcome(outcome)
@@ -482,9 +491,9 @@ final class SettingsManager: ObservableObject {
         url: URL,
         directory: URL,
         currentSettings: @MainActor @Sendable () async -> WallpaperSettings,
-        fileManager: FileManager
+        fileExists: @Sendable (URL) -> Bool
     ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
-        if fileManager.fileExists(atPath: url.path) {
+        if fileExists(url) {
             do {
                 let reloaded = try Self.loadSettings(from: url)
                 let current = await currentSettings()
@@ -498,7 +507,7 @@ final class SettingsManager: ObservableObject {
             // An atomic writer temporarily replaces the watched inode. If no replacement
             // arrives, recreate the deleted file from the last known-good in-memory state.
             do {
-                try Self.createDirectoryIfNeeded(at: directory, using: fileManager)
+                try Self.createDirectoryIfNeeded(at: directory)
                 // The settings are read when the file is written, not before
                 // the IO started: a local change that landed in between must
                 // not be overwritten by an older snapshot.
