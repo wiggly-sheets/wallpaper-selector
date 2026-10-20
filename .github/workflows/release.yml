@@ -9,11 +9,13 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install DMG packager
         run: brew install create-dmg
+      - name: Test
+        run: make test
       - name: Build release artifacts
         env:
           VERSION: ${{ github.ref_name }}

@@ -51,8 +51,9 @@ install: bundle
 	cp -R "$(APP_BUNDLE)" "$(INSTALL_APP)"
 
 run: install
-	open -n "$(INSTALL_APP)"
+	open "$(INSTALL_APP)"
 
+dmg: CONFIGURATION := release
 dmg: bundle
 	rm -rf "$(RELEASE_DIR)"
 	mkdir -p "$(STAGING_DIR)"
@@ -61,7 +62,7 @@ dmg: bundle
 	if [ -n "$(CREATE_DMG_FINALIZE_FLAGS)" ]; then hdiutil convert "$(DMG)" -format UDZO -o "$(DMG).final"; mv "$(DMG).final.dmg" "$(DMG)"; fi
 
 release-artifacts: dmg
-	shasum -a 256 "$(DMG)" > "$(DMG).sha256"
+	cd "$(RELEASE_DIR)" && shasum -a 256 "$(notdir $(DMG))" > "$(notdir $(DMG)).sha256"
 
 clean:
 	rm -rf .build "$(DIST_DIR)" "$(RELEASE_DIR)"

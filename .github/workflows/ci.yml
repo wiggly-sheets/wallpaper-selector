@@ -6,10 +6,25 @@ on:
 
 jobs:
   test:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Test
         run: make test
       - name: Build release app
         run: make bundle CONFIGURATION=release
+      # The DMG and the checksum are only built on a release tag, so a broken
+      # create-dmg flag, a broken hdiutil convert or a wrong checksum name
+      # would only be found at release time. This step runs the same recipe
+      # on every push.
+      # The step is NOT a gate: an environment-specific create-dmg or Finder
+      # failure on the runner must never turn CI red, so the step reports
+      # early signal only.
+      - name: Build release artifacts
+        continue-on-error: true
+        env:
+          VERSION: 0.0.0-ci
+          BUILD_NUMBER: 0
+        run: |
+          brew install create-dmg
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''

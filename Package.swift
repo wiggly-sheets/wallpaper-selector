@@ -18,7 +18,7 @@ let package = Package(
             name: "WallpaperSelector",
             dependencies: [],
             path: "SwiftWallpaperSelector/Sources/WallpaperSelector",
-            resources: [.copy("Resources")]
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "WallpaperSelectorTests",
