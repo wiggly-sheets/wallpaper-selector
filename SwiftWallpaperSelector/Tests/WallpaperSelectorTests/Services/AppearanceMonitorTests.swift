@@ -408,10 +408,10 @@ final class AppearanceMonitorTests: XCTestCase {
         XCTAssertEqual(manager.settings.currentWallpaper, pin.path)
     }
 
-    /// The wallpaper could not be stored, so it must not be reported as
-    /// applied.
+    /// The wallpaper is on the screen, so it is reported as applied. The
+    /// failed write of the settings is reported by the settings manager.
     @MainActor
-    func testAFailedSettingsWriteIsNotReportedAsApplied() throws {
+    func testAFailedSettingsWriteIsReportedAndTheWallpaperStaysApplied() async throws {
         let directory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let pin = try makeImage(named: "dark.jpg", in: directory)
@@ -421,6 +421,7 @@ final class AppearanceMonitorTests: XCTestCase {
             matchSystemAppearance: true,
             allFoldersDarkWallpaper: pin.path
         ))
+        manager.flushPendingWrites()
         let wallpaperProvider = RecordingWallpaperProvider()
         let monitor = AppearanceMonitor(
             settingsManager: manager,
@@ -437,9 +438,10 @@ final class AppearanceMonitorTests: XCTestCase {
         try Data("not-a-directory".utf8).write(to: manager.settingsDirectory)
 
         monitor.applyAppearanceWallpaperIfNeeded()
+        await manager.waitForPendingWrites()
 
         XCTAssertEqual(wallpaperProvider.calls, [pin.standardizedFileURL])
-        XCTAssertTrue(reportedPaths.isEmpty, "The wallpaper must not be reported as applied")
+        XCTAssertEqual(reportedPaths, [pin.path], "The wallpaper is on the screen")
         XCTAssertNotNil(manager.lastError)
     }
 

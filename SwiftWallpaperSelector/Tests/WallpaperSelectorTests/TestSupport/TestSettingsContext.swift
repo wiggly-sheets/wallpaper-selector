@@ -42,12 +42,16 @@ final class TestSettingsContext {
         try? FileManager.default.removeItem(at: rootDirectory)
     }
 
-    func makeSettingsManager(at directory: URL? = nil) -> SettingsManager {
+    func makeSettingsManager(
+        at directory: URL? = nil,
+        beforeWrite: (@Sendable () -> Void)? = nil
+    ) -> SettingsManager {
         SettingsManager(
             settingsDirectory: directory ?? settingsDirectory,
             userDefaults: userDefaults,
             defaultSettingsDirectory: defaultSettingsDirectory,
-            migrateLegacySettings: false
+            migrateLegacySettings: false,
+            beforeWrite: beforeWrite
         )
     }
 

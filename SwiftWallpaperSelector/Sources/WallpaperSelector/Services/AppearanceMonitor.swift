@@ -144,23 +144,19 @@ final class AppearanceMonitor: NSObject {
             return
         }
 
-        guard recordWallpaper(url) else { return }
+        recordWallpaper(url)
         onAppearanceChanged?(url.path)
     }
 
-    /// Stores the applied wallpaper. The settings manager reports a failed
-    /// write itself, so the wallpaper is not reported as applied then.
-    @discardableResult
-    private func recordWallpaper(_ url: URL) -> Bool {
-        let result = settingsManager.update {
+    /// Stores the applied wallpaper.
+    ///
+    /// The settings manager writes the file on its write queue and reports a
+    /// failed write itself, so the wallpaper is applied all the same.
+    private func recordWallpaper(_ url: URL) {
+        settingsManager.update {
             $0.currentWallpaper = url.path
             $0.recordWallpaperInHistory(url.path)
         }
-        if case .failure(let error) = result {
-            print("[AppearanceMonitor] Failed to store the applied wallpaper: \(error)")
-            return false
-        }
-        return true
     }
 
     private func applyFallbackIfRequestIsCurrent(

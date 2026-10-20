@@ -7,7 +7,7 @@ final class SettingsManagerTests: XCTestCase {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let current = WallpaperSettings(folderPaths: ["/current"], currentWallpaper: "/current/a.jpg")
-        XCTAssertSuccess(manager.replace(current))
+        manager.replace(current)
         let destination = context.directory(named: "Synchronized")
 
         try manager.relocateSettings(to: destination)
@@ -25,7 +25,7 @@ final class SettingsManagerTests: XCTestCase {
     func testRelocationAdoptsExistingValidSettingsWithoutOverwritingFile() throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
-        XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/current"])))
+        manager.replace(WallpaperSettings(folderPaths: ["/current"]))
         let destination = context.directory(named: "Existing")
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let existing = WallpaperSettings(
@@ -47,7 +47,7 @@ final class SettingsManagerTests: XCTestCase {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let current = WallpaperSettings(folderPaths: ["/current"])
-        XCTAssertSuccess(manager.replace(current))
+        manager.replace(current)
         let originalDirectory = manager.settingsDirectory
         context.userDefaults.set("/previous", forKey: SettingsManager.customDirectoryDefaultsKey)
 
@@ -97,7 +97,8 @@ final class SettingsManagerTests: XCTestCase {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let current = WallpaperSettings(folderPaths: ["/current"])
-        XCTAssertSuccess(manager.replace(current))
+        manager.replace(current)
+        manager.flushPendingWrites()
         let oldURL = context.settingsDirectory.appendingPathComponent("settings.json")
         let oldData = try Data(contentsOf: oldURL)
         let destination = context.directory(named: "Synchronized")
@@ -124,7 +125,7 @@ final class SettingsManagerTests: XCTestCase {
         let destination = context.directory(named: "Synchronized")
         try manager.relocateSettings(to: destination)
         let changed = WallpaperSettings(folderPaths: ["/changed"])
-        XCTAssertSuccess(manager.replace(changed))
+        manager.replace(changed)
 
         try manager.relocateSettings(to: context.settingsDirectory)
 
@@ -208,7 +209,8 @@ final class SettingsManagerTests: XCTestCase {
         try malformed.write(to: settingsURL)
 
         let manager = context.makeSettingsManager()
-        XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/after"])))
+        manager.replace(WallpaperSettings(folderPaths: ["/after"]))
+        manager.flushPendingWrites()
 
         XCTAssertEqual(try Data(contentsOf: corruptURL), malformed)
         XCTAssertEqual(try decodeSettings(at: settingsURL).folderPaths, ["/after"])
@@ -240,30 +242,54 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(manager.settings.themes.first?.id, "theme-0")
         XCTAssertEqual(manager.settings.activeThemeID, "theme-0")
 
-        XCTAssertSuccess(manager.replace(manager.settings))
+        manager.replace(manager.settings)
+        manager.flushPendingWrites()
 
         let stored = try decodeSettings(at: settingsURL)
         XCTAssertEqual(stored.themes.first?.id, "theme-0")
         XCTAssertEqual(stored.activeThemeID, "theme-0")
     }
 
-    func testFailedSaveKeepsLastPersistedAndInMemorySettings() throws {
+    /// A failed write is reported and the file keeps the content it had.
+    ///
+    /// The settings in memory are the new ones: the file catches up later.
+    func testAFailedWriteIsReportedAndTheFileKeepsThePreviousContent() async throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
-        let original = manager.settings
-        try FileManager.default.removeItem(at: manager.settingsURL)
-        try FileManager.default.removeItem(at: manager.settingsDirectory)
-        try Data("not-a-directory".utf8).write(to: manager.settingsDirectory)
+        manager.replace(WallpaperSettings(folderPaths: ["/saved"]))
+        await manager.waitForPendingWrites()
 
-        let result = manager.update { $0.folderPaths = ["/must-not-publish"] }
-
-        guard case .failure(.writeFailed) = result else {
-            return XCTFail("Expected the failed write to be returned")
+        // The settings folder cannot be written to, so the next save fails
+        // while the file on disk keeps the saved settings.
+        let directory = manager.settingsDirectory
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: directory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: directory.path
+            )
         }
-        XCTAssertEqual(manager.settings, original)
+
+        manager.update { $0.folderPaths = ["/never-written"] }
+
+        await manager.waitForPendingWrites()
+
         guard case .writeFailed? = manager.lastError else {
             return XCTFail("Expected the failed write to be published")
         }
+        XCTAssertEqual(
+            manager.settings.folderPaths,
+            ["/never-written"],
+            "The settings in memory are the new ones"
+        )
+        XCTAssertEqual(
+            try decodeSettings(at: manager.settingsURL).folderPaths,
+            ["/saved"],
+            "The file has to keep the content it had"
+        )
     }
 
     func testReplaceNormalizesCrossReferencesPinsAndHistoryBeforePublishingAndSaving() throws {
@@ -291,7 +317,8 @@ final class SettingsManagerTests: XCTestCase {
             wallpaperHistory: ["/one/a", "/one/b", "/one/a", "/one/c", "/one/d", "/one/e", "/one/f"]
         )
 
-        XCTAssertSuccess(manager.replace(input))
+        manager.replace(input)
+        manager.flushPendingWrites()
 
         let normalized = manager.settings
         XCTAssertEqual(normalized.folderPaths, ["/one", "/two"])
@@ -327,7 +354,7 @@ final class SettingsManagerTests: XCTestCase {
             ]
         )
 
-        XCTAssertSuccess(manager.replace(input))
+        manager.replace(input)
 
         let normalized = manager.settings
         XCTAssertEqual(normalized.themes[0].lightWallpaper, "/wallpapers/nested/light.jpg")
@@ -351,7 +378,8 @@ final class SettingsManagerTests: XCTestCase {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let expected = WallpaperSettings(folderPaths: ["/preserved"])
-        XCTAssertSuccess(manager.replace(expected))
+        manager.replace(expected)
+        manager.flushPendingWrites()
 
         try FileManager.default.removeItem(at: manager.settingsURL)
 
@@ -367,7 +395,8 @@ final class SettingsManagerTests: XCTestCase {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let expected = WallpaperSettings(folderPaths: ["/preserved"])
-        XCTAssertSuccess(manager.replace(expected))
+        manager.replace(expected)
+        manager.flushPendingWrites()
         let malformed = Data("{broken".utf8)
 
         try malformed.write(to: manager.settingsURL, options: [.atomic])
@@ -425,14 +454,15 @@ final class SettingsManagerTests: XCTestCase {
         }
         defer { subscription.cancel() }
 
-        XCTAssertSuccess(manager.replace(updated))
+        manager.replace(updated)
 
         XCTAssertEqual(delivered, updated)
         XCTAssertEqual(readInsideSink, updated)
     }
 
-    /// A failed write must not publish anything at all.
-    func testFailedWriteDoesNotPublishTheNewValue() throws {
+    /// A failed write does not stop the publish: the settings in memory are
+    /// the new ones, and the failure is reported when the write runs.
+    func testAFailedWriteStillPublishesTheNewValue() async throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let original = manager.settings
@@ -445,13 +475,17 @@ final class SettingsManagerTests: XCTestCase {
         try FileManager.default.removeItem(at: manager.settingsDirectory)
         try Data("not-a-directory".utf8).write(to: manager.settingsDirectory)
 
-        let result = manager.update { $0.folderPaths = ["/must-not-publish"] }
+        manager.update { $0.folderPaths = ["/must-be-published"] }
 
-        guard case .failure(.writeFailed) = result else {
-            return XCTFail("Expected the failed write to be returned")
+        XCTAssertEqual(manager.settings.folderPaths, ["/must-be-published"])
+        XCTAssertEqual(delivered?.folderPaths, ["/must-be-published"])
+
+        await manager.waitForPendingWrites()
+
+        guard case .writeFailed? = manager.lastError else {
+            return XCTFail("Expected the failed write to be published")
         }
-        XCTAssertEqual(manager.settings, original)
-        XCTAssertEqual(delivered, original)
+        XCTAssertNotEqual(manager.settings, original)
     }
 
     /// A legacy file that cannot be read must not block the migration for
@@ -502,7 +536,8 @@ final class SettingsManagerTests: XCTestCase {
         let manager = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
         XCTAssertTrue(manager.isLegacyMigrationPending)
 
-        XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/after-save"])))
+        manager.replace(WallpaperSettings(folderPaths: ["/after-save"]))
+        manager.flushPendingWrites()
 
         XCTAssertNotNil(manager.lastError, "The reason for the default settings must stay visible")
         XCTAssertTrue(
@@ -529,7 +564,8 @@ final class SettingsManagerTests: XCTestCase {
         let manager = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: manager.settingsURL.path))
 
-        XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/after-save"])))
+        manager.replace(WallpaperSettings(folderPaths: ["/after-save"]))
+        await manager.waitForPendingWrites()
 
         try encoded(WallpaperSettings(folderPaths: ["/external"]))
             .write(to: manager.settingsURL, options: [.atomic])
@@ -588,12 +624,11 @@ final class SettingsManagerTests: XCTestCase {
         )
     }
 
-    /// A failed write must stay visible when the watcher reads an unchanged
-    /// file: the settings in memory were never written to disk.
+    /// A failed write must stay visible when the watcher reads the file: the
+    /// settings in memory were never written to disk.
     func testTheWriteFailureSurvivesAnUnchangedWatcherEvent() async throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
-        XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/saved"])))
         let generationBefore = manager.externalChangeGeneration
 
         // The settings folder cannot be written to, so the next save fails
@@ -610,13 +645,19 @@ final class SettingsManagerTests: XCTestCase {
             )
         }
 
-        let result = manager.update { $0.folderPaths = ["/never-written"] }
-        guard case .failure(.writeFailed) = result else {
-            return XCTFail("Expected the failed write to be returned")
-        }
+        manager.update { $0.folderPaths = ["/never-written"] }
+
+        await manager.waitForPendingWrites()
+
         guard case .writeFailed? = manager.lastError else {
             return XCTFail("Expected the failed write to be published")
         }
+
+        // The watcher reads the file, which still holds the old settings.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: manager.settingsURL.path
+        )
 
         let handled = await waitUntil { manager.externalChangeGeneration > generationBefore }
         XCTAssertTrue(handled, "The watcher should handle the pending change")
@@ -626,6 +667,11 @@ final class SettingsManagerTests: XCTestCase {
         guard case .writeFailed? = manager.lastError else {
             return XCTFail("The write failure must stay visible after the unchanged read")
         }
+        XCTAssertEqual(
+            manager.settings.folderPaths,
+            ["/never-written"],
+            "The settings in memory are the new ones"
+        )
     }
 
     /// Waits for the file watcher instead of relying on a tight timeout.
@@ -655,7 +701,8 @@ final class SettingsManagerTests: XCTestCase {
             fileExists: { url in fileCheck.fileExists(url) },
             migrateLegacySettings: false
         )
-        XCTAssertSuccess(manager.replace(WallpaperSettings(folderPaths: ["/wallpapers"])))
+        manager.replace(WallpaperSettings(folderPaths: ["/wallpapers"]))
+        manager.flushPendingWrites()
 
         // The next check for the deleted file pauses the reload.
         fileCheck.pauseOnMissingFile()
@@ -664,7 +711,7 @@ final class SettingsManagerTests: XCTestCase {
         await fileCheck.waitUntilChecked()
 
         // The change of the rotation timer lands while the reload runs.
-        XCTAssertSuccess(manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" })
+        manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" }
         fileCheck.resumeTheReload()
 
         let settled = await waitUntilTheFileStopsChanging(at: manager.settingsURL)
@@ -715,16 +762,6 @@ final class SettingsManagerTests: XCTestCase {
 
     private func decodeSettings(at url: URL) throws -> WallpaperSettings {
         try JSONDecoder().decode(WallpaperSettings.self, from: Data(contentsOf: url))
-    }
-}
-
-private func XCTAssertSuccess(
-    _ result: Result<Void, SettingsManagerError>,
-    file: StaticString = #filePath,
-    line: UInt = #line
-) {
-    if case let .failure(error) = result {
-        XCTFail("Expected success, got \(error)", file: file, line: line)
     }
 }
 

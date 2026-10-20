@@ -62,6 +62,65 @@ final class AppCoordinatorTests: XCTestCase {
             "The wallpaper could not be applied."
         )
     }
+
+    /// A settings write that fails has to reach the menu bar, so the user
+    /// sees it without opening the settings window.
+    func testAFailedSettingsWriteReachesTheMenuBar() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: hotKeyManager,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+
+        // The settings folder cannot be written to, so the next save fails.
+        let directory = settingsManager.settingsDirectory
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: directory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: directory.path
+            )
+        }
+
+        coordinator.appState.updateSettings { $0.folderPaths = ["/never-written"] }
+        await settingsManager.waitForPendingWrites()
+
+        XCTAssertTrue(
+            coordinator.rotationService.lastError?.contains("Could not save settings") == true,
+            "The failed write has to be reported where the wallpaper errors are"
+        )
+    }
+
+    /// A settings change that was made a moment before the quit has to reach
+    /// the disk: the write runs on a queue, so it has to be flushed.
+    func testTheQuitFlushesThePendingSettingsWrite() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: hotKeyManager,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.folderPaths = ["/before-quit"] }
+
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+
+        let stored = try JSONDecoder().decode(
+            WallpaperSettings.self,
+            from: Data(contentsOf: settingsManager.settingsURL)
+        )
+        XCTAssertEqual(stored.folderPaths, ["/before-quit"])
+    }
 }
 
 /// Records the shortcuts the coordinator asks for without registering a real

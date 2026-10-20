@@ -185,13 +185,15 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertNotNil(rotationService.lastError)
     }
 
-    func testFailedSettingsWriteIsReportedAsAnError() throws {
+    func testFailedSettingsWriteIsReportedAsAnError() async throws {
         try FileManager.default.removeItem(at: settingsManager.settingsDirectory)
         try Data("not-a-directory".utf8).write(to: settingsManager.settingsDirectory)
 
         let applied = rotationService.apply(URL(fileURLWithPath: "/wallpapers/applied.png"))
 
         XCTAssertTrue(applied)
+        // The write runs on a queue, so the failure arrives later.
+        await settingsManager.waitForPendingWrites()
         XCTAssertNotNil(rotationService.lastError)
     }
 

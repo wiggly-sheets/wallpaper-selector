@@ -110,6 +110,12 @@ final class AppCoordinator: ObservableObject {
             name: NSApplication.didBecomeActiveNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWillTerminate),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
     }
 
     deinit {
@@ -160,5 +166,11 @@ final class AppCoordinator: ObservableObject {
         // takes the shortcut back. A successful registration reports no error,
         // so the error item disappears on its own.
         hotKeyManager.register()
+    }
+
+    /// The settings are written on a queue, so a change that was made a
+    /// moment before the quit has to be flushed before the app goes away.
+    @objc private func handleWillTerminate() {
+        settingsManager.flushPendingWrites()
     }
 }

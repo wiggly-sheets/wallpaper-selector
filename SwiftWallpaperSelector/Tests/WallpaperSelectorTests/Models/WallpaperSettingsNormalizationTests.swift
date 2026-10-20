@@ -44,6 +44,7 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
             themes: [theme],
             activeThemeID: theme.id
         ))
+        manager.flushPendingWrites()
 
         let reloaded = context.makeSettingsManager().settings
 

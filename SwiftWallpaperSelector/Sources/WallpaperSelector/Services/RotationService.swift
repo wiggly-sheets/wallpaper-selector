@@ -34,6 +34,13 @@ final class RotationService: NSObject, ObservableObject {
         self.themeProvider = themeProvider
         self.wallpaperLibrary = wallpaperLibrary
         super.init()
+        // A settings write that fails is reported where the wallpaper errors
+        // are, so the menu bar shows it too. The write runs on a queue, so the
+        // failure arrives after the wallpaper was applied.
+        settingsManager.onError = { [weak self] error in
+            guard case .writeFailed = error else { return }
+            self?.reportWallpaperError(error.localizedDescription)
+        }
     }
 
     deinit {
@@ -234,18 +241,13 @@ final class RotationService: NSObject, ObservableObject {
     /// Stores the applied wallpaper. A failed settings write is reported, but
     /// the wallpaper is applied all the same.
     private func recordWallpaper(_ url: URL) {
-        let result = settingsManager.update { settings in
+        settingsManager.update { settings in
             settings.currentWallpaper = url.path
             settings.recordWallpaperInHistory(url.path)
         }
-        switch result {
-        case .success:
-            // A deferred pick keeps its message until the pick is applied.
-            if pendingManualPick == nil {
-                lastError = nil
-            }
-        case .failure(let error):
-            setError(error.localizedDescription)
+        // A deferred pick keeps its message until the pick is applied.
+        if pendingManualPick == nil {
+            lastError = nil
         }
     }
 
