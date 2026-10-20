@@ -19,7 +19,7 @@ actor WallpaperThumbnailRepository {
     private var cache: [CacheKey: DecodedWallpaperThumbnail] = [:]
     private var cacheOrder: [CacheKey] = []
 
-    init(cacheLimit: Int = 256) {
+    init(cacheLimit: Int = 64) {
         self.cacheLimit = max(1, cacheLimit)
     }
 
@@ -56,6 +56,12 @@ actor WallpaperThumbnailRepository {
     private func touch(_ key: CacheKey) {
         cacheOrder.removeAll { $0 == key }
         cacheOrder.append(key)
+    }
+
+    /// Drops the decoded thumbnails. Used when a window that shows them closes.
+    func purge() {
+        cache.removeAll()
+        cacheOrder.removeAll()
     }
 
     private func evictIfNeeded() {
