@@ -60,6 +60,13 @@ struct SettingsView: View {
                             .foregroundColor(.red)
                             .textSelection(.enabled)
                     }
+
+                    if let errorMessage = viewModel.wallpaperErrorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .textSelection(.enabled)
+                    }
                 }
                 }
 
@@ -106,22 +113,28 @@ struct SettingsView: View {
                     }
 
                     Section("Appearance Overrides (All Folders)") {
+                        Text("When an appearance theme is set, the wallpaper of that appearance is pinned in the Appearance sheet of the main window.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
                         Picker("Light Wallpaper", selection: $viewModel.allFoldersLightWallpaper) {
                             Text("None").tag(Optional<String>.none as String?)
-                            ForEach(viewModel.currentThemeImages, id: \.self) { url in
+                            ForEach(viewModel.allFoldersLightWallpaperImages, id: \.self) { url in
                                 Text(url.lastPathComponent).tag(Optional(url.path))
                             }
                         }
                         .pickerStyle(.menu)
+                        .disabled(viewModel.isGlobalLightPinDisabled)
                         .onChange(of: viewModel.allFoldersLightWallpaper) { _ in viewModel.persistAppearanceOverrides() }
 
                         Picker("Dark Wallpaper", selection: $viewModel.allFoldersDarkWallpaper) {
                             Text("None").tag(Optional<String>.none as String?)
-                            ForEach(viewModel.currentThemeImages, id: \.self) { url in
+                            ForEach(viewModel.allFoldersDarkWallpaperImages, id: \.self) { url in
                                 Text(url.lastPathComponent).tag(Optional(url.path))
                             }
                         }
                         .pickerStyle(.menu)
+                        .disabled(viewModel.isGlobalDarkPinDisabled)
                         .onChange(of: viewModel.allFoldersDarkWallpaper) { _ in viewModel.persistAppearanceOverrides() }
                     }
                 }
@@ -139,6 +152,13 @@ struct SettingsView: View {
                     ShortcutRecorder(label: "Open Menu Bar Menu", shortcut: viewModel.shortcuts.showMenu) {
                         viewModel.setShowMenuShortcut($0)
                     }
+
+                    if let errorMessage = viewModel.hotKeyErrorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                            .textSelection(.enabled)
+                    }
                 }
                 }
 
@@ -154,8 +174,11 @@ struct SettingsView: View {
                             .font(.subheadline)
                     }
                     .onDelete { indexSet in
-                        indexSet.forEach {
-                            viewModel.removeFolder(viewModel.folderPaths[$0])
+                        // The settings publish synchronously, so the array shrinks
+                        // while the rows are removed. Work on a snapshot.
+                        let paths = viewModel.folderPaths
+                        for index in indexSet {
+                            viewModel.removeFolder(paths[index])
                         }
                     }
 
@@ -186,8 +209,11 @@ struct SettingsView: View {
                         .padding(.vertical, 2)
                     }
                     .onDelete { indexSet in
-                        indexSet.forEach {
-                            viewModel.removeTheme(id: viewModel.themes[$0].id)
+                        // The settings publish synchronously, so the array shrinks
+                        // while the rows are removed. Work on a snapshot.
+                        let themes = viewModel.themes
+                        for index in indexSet {
+                            viewModel.removeTheme(id: themes[index].id)
                         }
                     }
 
@@ -209,14 +235,16 @@ struct SettingsView: View {
                         }
                     }
                     .accessibilityLabel("Rotation interval picker")
+                    .disabled(viewModel.isRotationControlDisabled)
                     .onChange(of: viewModel.intervalMinutes) { viewModel.setInterval($0) }
 
                     Picker("Action", selection: $viewModel.rotationAction) {
-                        ForEach(RotationAction.allCases, id: \.self) { action in
+                        ForEach(viewModel.availableRotationActions, id: \.self) { action in
                             Text(action.label).tag(action)
                         }
                     }
                     .accessibilityLabel("Rotation action picker")
+                    .disabled(viewModel.isRotationControlDisabled)
                     .onChange(of: viewModel.rotationAction) { viewModel.setRotationAction($0) }
                 }
                 }
@@ -350,7 +378,7 @@ final class KeyboardCaptureHost: NSView {
         103: "F11", 111: "F12"
     ]
 
-    isolated deinit {
+    deinit {
         if let monitor {
             NSEvent.removeMonitor(monitor)
         }

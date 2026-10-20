@@ -15,6 +15,7 @@ final class MenuBarController: NSObject {
 
     private let viewModel: MenuBarViewModel
     private var cancellables = Set<AnyCancellable>()
+    private var isMenuRebuildScheduled = false
 
 
     init(viewModel: MenuBarViewModel) {
@@ -29,6 +30,23 @@ final class MenuBarController: NSObject {
         guard let statusItem = statusItem else { return }
 
         let menu = NSMenu(title: "Wallpaper Selector")
+        // The guards below set `isEnabled` by hand: AppKit must not enable the
+        // items again.
+        menu.autoenablesItems = false
+
+        let errorMessages = viewModel.errorMessages
+        for message in errorMessages {
+            let errorItem = NSMenuItem(title: message, action: nil, keyEquivalent: "")
+            errorItem.isEnabled = false
+            errorItem.attributedTitle = NSAttributedString(
+                string: message,
+                attributes: [.foregroundColor: NSColor.systemRed]
+            )
+            menu.addItem(errorItem)
+        }
+        if !errorMessages.isEmpty {
+            menu.addItem(NSMenuItem.separator())
+        }
 
         let statusMenuItem = NSMenuItem(title: viewModel.menuTitle, action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
@@ -52,6 +70,9 @@ final class MenuBarController: NSObject {
         let rotationTitle = viewModel.isRotationActive ? "Stop Rotation" : "Start Rotation"
         let rotationItem = NSMenuItem(title: rotationTitle, action: #selector(toggleRotation(_:)), keyEquivalent: "")
         rotationItem.target = self
+        // The rotation cannot run while the appearance is matched, so the
+        // item would do nothing.
+        rotationItem.isEnabled = !viewModel.isRotationControlDisabled
         menu.addItem(rotationItem)
 
         menu.addItem(NSMenuItem.separator())
@@ -64,8 +85,12 @@ final class MenuBarController: NSObject {
 
         if !viewModel.recentWallpapers.isEmpty {
             let recentMenu = NSMenu(title: "Recent Wallpapers")
+            // The items set `isEnabled` by hand: AppKit must not enable them
+            // again.
+            recentMenu.autoenablesItems = false
 
-            let displayedRecents = Array(viewModel.recentWallpapers.prefix(10))
+            // The history is already bounded by the limit of the settings.
+            let displayedRecents = viewModel.displayedRecentWallpapers
 
             for (index, path) in displayedRecents.enumerated() {
                 let menuItem = NSMenuItem(title: (path as NSString).lastPathComponent, action: #selector(selectRecentWallpaper(_:)), keyEquivalent: "")
@@ -73,12 +98,14 @@ final class MenuBarController: NSObject {
                 menuItem.tag = index
                 menuItem.representedObject = path
                 menuItem.state = path == viewModel.currentWallpaper ? .on : .off
+                menuItem.isEnabled = viewModel.canApplyRecentWallpaper(path)
                 recentMenu.addItem(menuItem)
             }
 
             let recentMenuItem = NSMenuItem(title: "Recent Wallpapers", action: nil, keyEquivalent: "")
             recentMenuItem.image = symbol("clock.arrow.circlepath")
             recentMenuItem.submenu = recentMenu
+            recentMenuItem.isEnabled = true
             menu.addItem(recentMenuItem)
 
             menu.addItem(NSMenuItem.separator())
@@ -88,6 +115,7 @@ final class MenuBarController: NSObject {
             let rotateItem = NSMenuItem(title: "Rotate", action: nil, keyEquivalent: "")
             rotateItem.image = symbol("arrow.triangle.2.circlepath")
             rotateItem.submenu = rotateMenu
+            rotateItem.isEnabled = true
             menu.addItem(rotateItem)
         }
 
@@ -95,6 +123,7 @@ final class MenuBarController: NSObject {
             let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
             themeItem.image = symbol("paintpalette")
             themeItem.submenu = themeMenu
+            themeItem.isEnabled = true
             menu.addItem(themeItem)
         }
 
@@ -132,12 +161,17 @@ final class MenuBarController: NSObject {
         rebuildMenu()
         guard let button = statusItem?.button, let menu = statusItem?.menu else { return }
         NSApp.activate(ignoringOtherApps: true)
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+        // Anchor the menu at the bottom-left of the status item so it drops
+        // below the menu bar instead of opening above the screen edge.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
     }
 
     private func buildRotateSubmenu() -> NSMenu? {
         let submenu = NSMenu(title: "Rotate")
-        let controlsDisabled = viewModel.matchSystemAppearance
+        // The guards below set `isEnabled` by hand: AppKit must not enable the
+        // items again.
+        submenu.autoenablesItems = false
+        let controlsDisabled = viewModel.isRotationControlDisabled
 
         let intervals: [(RotationInterval, String)] = [
             (.off, "Off"),
@@ -186,6 +220,9 @@ final class MenuBarController: NSObject {
 
     private func buildThemeSubmenu() -> NSMenu? {
         let submenu = NSMenu(title: "Theme")
+        // The guards below set `isEnabled` by hand: AppKit must not enable the
+        // items again.
+        submenu.autoenablesItems = false
 
         let allFoldersItem = NSMenuItem(title: "All Folders", action: #selector(selectTheme(_:)), keyEquivalent: "")
         allFoldersItem.target = self
@@ -223,9 +260,6 @@ final class MenuBarController: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: nil)
-            button.target = self
-            button.action = #selector(togglePopover(_:))
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         rebuildMenu()
     }
@@ -233,8 +267,21 @@ final class MenuBarController: NSObject {
     private func observeViewModelChanges() {
         viewModel.objectWillChange
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuildMenu() }
+            .sink { [weak self] _ in self?.scheduleMenuRebuild() }
             .store(in: &cancellables)
+    }
+
+    /// Rebuilds the menu at most once per main-queue turn: one settings
+    /// change publishes many properties, and every one of them would
+    /// otherwise rebuild the menu again.
+    private func scheduleMenuRebuild() {
+        guard !isMenuRebuildScheduled else { return }
+        isMenuRebuildScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isMenuRebuildScheduled = false
+            self.rebuildMenu()
+        }
     }
 
 

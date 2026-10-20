@@ -13,9 +13,23 @@ struct TrayPopoverView: View {
             Divider()
             autoRotateSection
             allSpacesSection
+            errorCaption
         }
         .padding(8)
         .frame(width: 300, height: 528)
+    }
+
+
+    private var errorCaption: some View {
+        Group {
+            if let errorMessage = viewModel.lastError {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 
 
@@ -124,6 +138,8 @@ struct TrayPopoverView: View {
                 }
                 .pickerStyle(.menu)
                 .controlSize(.small)
+                // The rotation cannot run while the appearance is matched.
+                .disabled(viewModel.isRotationControlDisabled)
                 .frame(maxWidth: .infinity)
 
                 Spacer()
@@ -133,9 +149,9 @@ struct TrayPopoverView: View {
                     rotateButton("↺", enabled: autoEnabled, action: viewModel.shuffle)
                     rotateButton("→", enabled: autoEnabled, action: viewModel.next)
                     Divider().frame(height: 16)
-                    rotateButton("≪", enabled: themeAutoEnabled, action: viewModel.themePrevious)
-                    rotateButton("◊", enabled: themeAutoEnabled, action: viewModel.themeShuffle)
-                    rotateButton("≫", enabled: themeAutoEnabled, action: viewModel.themeNext)
+                    rotateButton("≪", enabled: viewModel.isThemeActionEnabled, action: viewModel.themePrevious)
+                    rotateButton("◊", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeShuffle)
+                    rotateButton("≫", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeNext)
                 }
             }
         }
@@ -150,10 +166,6 @@ struct TrayPopoverView: View {
 
     private var autoEnabled: Bool {
         viewModel.intervalMinutes != .off && shuffleEnabled
-    }
-
-    private var themeAutoEnabled: Bool {
-        viewModel.intervalMinutes != .off && !viewModel.themes.isEmpty
     }
 
 
