@@ -1009,6 +1009,154 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(manager.settings, external)
     }
 
+    /// An external edit that lands after a failed write has to be adopted.
+    ///
+    /// The file on the disk is older than the settings in memory, so the
+    /// file must not overwrite them. The external edit is newer than the
+    /// settings in memory, so it has to be adopted: the file and the
+    /// settings have to agree afterwards.
+    func testAnExternalEditAfterAFailedWriteIsAdopted() async throws {
+        let context = try TestSettingsContext()
+        let readGate = ReadGate()
+        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
+        try encoded(original).write(to: settingsURL)
+        let manager = context.makeSettingsManager(beforeRead: { readGate.beforeRead() })
+        XCTAssertEqual(manager.settings, original)
+
+        // The settings folder cannot be written to, so the next save fails
+        // while the file on the disk keeps the saved settings.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: context.settingsDirectory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: context.settingsDirectory.path
+            )
+        }
+
+        manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" }
+        await manager.waitForPendingWrites()
+
+        guard case .writeFailed? = manager.lastError else {
+            return XCTFail("Expected the failed write to be reported")
+        }
+        XCTAssertEqual(
+            try decodeSettings(at: settingsURL).currentWallpaper,
+            "/wallpapers/x.jpg",
+            "The file has to keep the content it had"
+        )
+
+        // The folder is writable again, so the external edit can land.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: context.settingsDirectory.path
+        )
+
+        // The change lands on the file, outside the app.
+        let external = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/external.jpg")
+        readGate.pauseTheNextRead()
+        try encoded(external).write(to: settingsURL, options: [.atomic])
+
+        // The reload reads the file, so the change is picked up.
+        let reading = await readGate.waitUntilTheReadWaits()
+        XCTAssertTrue(reading, "The reload should read the settings file")
+        readGate.resumeTheRead()
+
+        let reloaded = await waitUntil { manager.settings == external }
+        XCTAssertTrue(reloaded, "The external change has to be adopted")
+        XCTAssertEqual(manager.settings, external)
+        XCTAssertEqual(
+            try decodeSettings(at: settingsURL),
+            external,
+            "The file and the settings in memory have to agree"
+        )
+    }
+
+    /// A reload that reads an unchanged file must not undo a failed write.
+    ///
+    /// The file on the disk is older than the settings in memory, so the
+    /// newer settings have to survive the reload and the message of the
+    /// failed write has to stay visible. The next external edit is newer
+    /// than the settings in memory, so it has to be adopted: the failed
+    /// write must not keep every later external edit out.
+    func testTheNewerValueSurvivesAnUnchangedReloadAfterAFailedWrite() async throws {
+        let context = try TestSettingsContext()
+        let readGate = ReadGate()
+        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
+        try encoded(original).write(to: settingsURL)
+        let manager = context.makeSettingsManager(beforeRead: { readGate.beforeRead() })
+        XCTAssertEqual(manager.settings, original)
+        let generationBefore = manager.externalChangeGeneration
+
+        // The settings folder cannot be written to, so the next save fails
+        // while the file on the disk keeps the saved settings.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: context.settingsDirectory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: context.settingsDirectory.path
+            )
+        }
+
+        manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" }
+        await manager.waitForPendingWrites()
+
+        guard case .writeFailed? = manager.lastError else {
+            return XCTFail("Expected the failed write to be reported")
+        }
+
+        // The watcher reads the file, which still holds the old settings.
+        readGate.pauseTheNextRead()
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: settingsURL.path
+        )
+        let reading = await readGate.waitUntilTheReadWaits()
+        XCTAssertTrue(reading, "The reload should read the settings file")
+        readGate.resumeTheRead()
+
+        let handled = await waitUntil { manager.externalChangeGeneration > generationBefore }
+        XCTAssertTrue(handled, "The watcher should handle the pending change")
+        // The watcher applies the outcome right after it read the file.
+        let cleared = await waitUntil({ manager.lastError == nil }, timeout: 2)
+        XCTAssertFalse(cleared, "The write failure must stay visible")
+        guard case .writeFailed? = manager.lastError else {
+            return XCTFail("The write failure must stay visible after the unchanged read")
+        }
+        XCTAssertEqual(
+            manager.settings.currentWallpaper,
+            "/wallpapers/new.jpg",
+            "The newer settings in memory have to survive the reload"
+        )
+
+        // The folder is writable again, so the external edit can land.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: context.settingsDirectory.path
+        )
+
+        // The change lands on the file, outside the app.
+        let external = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/external.jpg")
+        readGate.pauseTheNextRead()
+        try encoded(external).write(to: settingsURL, options: [.atomic])
+
+        // The reload reads the file, so the change is picked up.
+        let readingTheEdit = await readGate.waitUntilTheReadWaits()
+        XCTAssertTrue(readingTheEdit, "The reload should read the settings file")
+        readGate.resumeTheRead()
+
+        let reloaded = await waitUntil { manager.settings == external }
+        XCTAssertTrue(reloaded, "The external change has to be adopted after the failed write")
+        XCTAssertEqual(manager.settings, external)
+    }
+
     private func encoded(_ settings: WallpaperSettings, prettyPrinted: Bool = false) throws -> Data {
         let encoder = JSONEncoder()
         if prettyPrinted {

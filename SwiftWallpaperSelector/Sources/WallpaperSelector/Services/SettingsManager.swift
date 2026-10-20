@@ -67,7 +67,20 @@ final class SettingsManager: ObservableObject {
     ///
     /// The box is the single source of truth: the write queue reads it, so
     /// every write writes the settings that are current when it runs.
-    private let currentSettings: SettingsBox
+    private let currentSettings: SettingsBox<WallpaperSettings>
+
+    /// The content the settings file holds on the disk.
+    ///
+    /// The box holds the value, so the IO path can read it without a hop to
+    /// the main actor. The value is `nil` while the file was not read or
+    /// written yet.
+    ///
+    /// The content tells the reload whether the file carries something the
+    /// app does not know: a file that holds the content the app last knew
+    /// carries nothing new, so it must not overwrite the settings in memory.
+    /// That is the case after a failed write: the file still holds the older
+    /// content.
+    private let lastKnownOnDisk = SettingsBox<WallpaperSettings?>(nil)
 
     /// Publishes every settings change. The new value is stored before it is
     /// published, so `settings` already holds it while subscribers run.
@@ -249,7 +262,10 @@ final class SettingsManager: ObservableObject {
 
             if fileExists(settingsURL) {
                 do {
-                    publish(try Self.loadSettings(from: settingsURL))
+                    let loaded = try Self.loadSettings(from: settingsURL)
+                    publish(loaded)
+                    // The file holds the settings that were loaded.
+                    lastKnownOnDisk.value = loaded
                 } catch let error as SettingsManagerError {
                     // The unreadable file is the only copy of the user's folders,
                     // themes and history: keep it before anything can overwrite it.
@@ -273,13 +289,15 @@ final class SettingsManager: ObservableObject {
                     let settings = currentSettings
                     let beforeWrite = self.beforeWrite
                     let fileManager = self.fileManager
+                    let onDisk = lastKnownOnDisk
                     report(writeQueue.sync {
                         Self.importLegacySettings(
                             settings,
                             from: legacyURL,
                             to: settingsURL,
                             fileManager: fileManager,
-                            beforeWrite: beforeWrite
+                            beforeWrite: beforeWrite,
+                            onDisk: onDisk
                         )
                     })
                     return
@@ -340,15 +358,19 @@ final class SettingsManager: ObservableObject {
     /// deleted, so its bytes survive and the next launch does not import it
     /// again.
     nonisolated private static func importLegacySettings(
-        _ settings: SettingsBox,
+        _ settings: SettingsBox<WallpaperSettings>,
         from legacyURL: URL,
         to settingsURL: URL,
         fileManager: FileManager,
-        beforeWrite: (@Sendable () -> Void)?
-    ) -> Result<Void, SettingsManagerError> {
+        beforeWrite: (@Sendable () -> Void)?,
+        onDisk: SettingsBox<WallpaperSettings?>
+    ) -> Result<WallpaperSettings, SettingsManagerError> {
+        let written: WallpaperSettings
         switch performWrite(settings, to: settingsURL, beforeWrite: beforeWrite) {
-        case .success:
-            break
+        case .success(let value):
+            written = value
+            // The settings file holds the imported settings now.
+            onDisk.value = value
         case .failure(let error):
             return .failure(error)
         }
@@ -362,7 +384,7 @@ final class SettingsManager: ObservableObject {
                 try? fileManager.removeItem(at: migratedURL)
             }
             try fileManager.moveItem(at: legacyURL, to: migratedURL)
-            return .success(())
+            return .success(written)
         } catch {
             return .failure(.renameFailed(path: legacyURL.path, reason: error.localizedDescription))
         }
@@ -386,13 +408,16 @@ final class SettingsManager: ObservableObject {
                 destinationSettings = try Self.loadSettings(from: destinationURL)
             } else {
                 destinationSettings = settings
-                try writeNow(to: destinationURL).get()
+                _ = try writeNow(to: destinationURL).get()
             }
 
             stopFileWatcher()
             settingsDirectory = normalized
             settingsURL = destinationURL
             publish(destinationSettings)
+            // The file in the new location holds the settings that were
+            // adopted.
+            lastKnownOnDisk.value = destinationSettings
 
             if let customDirectoryPath {
                 userDefaults.set(customDirectoryPath, forKey: Self.customDirectoryDefaultsKey)
@@ -454,6 +479,7 @@ final class SettingsManager: ObservableObject {
         let settings = currentSettings
         let beforeWrite = self.beforeWrite
         let counters = writeQueueCounters
+        let onDisk = lastKnownOnDisk
         counters.writeEnqueued()
         writeQueue.async { [weak self] in
             let result = Self.performWrite(
@@ -462,6 +488,10 @@ final class SettingsManager: ObservableObject {
                 createsDirectory: createsDirectory,
                 beforeWrite: beforeWrite
             )
+            if case .success(let written) = result {
+                // The write landed, so the file holds the written settings.
+                onDisk.value = written
+            }
             // The write has landed, so the file holds the settings that were
             // current when it ran.
             counters.writeLanded()
@@ -475,11 +505,17 @@ final class SettingsManager: ObservableObject {
     ///
     /// The startup and the switch of the settings location need the file
     /// before they continue, so they wait for the write.
-    private func writeNow(to url: URL) -> Result<Void, SettingsManagerError> {
+    private func writeNow(to url: URL) -> Result<WallpaperSettings, SettingsManagerError> {
         let settings = currentSettings
         let beforeWrite = self.beforeWrite
+        let onDisk = lastKnownOnDisk
         return writeQueue.sync {
-            Self.performWrite(settings, to: url, beforeWrite: beforeWrite)
+            let result = Self.performWrite(settings, to: url, beforeWrite: beforeWrite)
+            if case .success(let written) = result {
+                // The write landed, so the file holds the written settings.
+                onDisk.value = written
+            }
+            return result
         }
     }
 
@@ -488,18 +524,19 @@ final class SettingsManager: ObservableObject {
     /// The settings are read right before the write, so a change that landed
     /// while the write waited is in the file.
     nonisolated private static func performWrite(
-        _ settings: SettingsBox,
+        _ settings: SettingsBox<WallpaperSettings>,
         to url: URL,
         createsDirectory: Bool = false,
         beforeWrite: (@Sendable () -> Void)?
-    ) -> Result<Void, SettingsManagerError> {
+    ) -> Result<WallpaperSettings, SettingsManagerError> {
         beforeWrite?()
         do {
             if createsDirectory {
                 try createDirectoryIfNeeded(at: url.deletingLastPathComponent())
             }
-            try persist(settings.value, to: url)
-            return .success(())
+            let written = settings.value.normalized()
+            try persist(written, to: url)
+            return .success(written)
         } catch let error as SettingsManagerError {
             return .failure(error)
         } catch {
@@ -508,7 +545,7 @@ final class SettingsManager: ObservableObject {
     }
 
     /// Reports the result of a write that ran on the write queue.
-    private func finishWrite(_ result: Result<Void, SettingsManagerError>) {
+    private func finishWrite(_ result: Result<WallpaperSettings, SettingsManagerError>) {
         switch result {
         case .success:
             // The file is up to date now, so the watcher can watch it.
@@ -637,6 +674,7 @@ final class SettingsManager: ObservableObject {
         externalChangeGeneration &+= 1
         let generation = externalChangeGeneration
         let counters = writeQueueCounters
+        let onDisk = lastKnownOnDisk
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -645,7 +683,8 @@ final class SettingsManager: ObservableObject {
                 currentSettings: { @MainActor in self.settings },
                 fileExists: self.fileExists,
                 beforeRead: self.beforeRead,
-                writeQueueState: { counters.snapshot }
+                writeQueueState: { counters.snapshot },
+                onDisk: onDisk
             )
             guard self.settingsURL == url else { self.startFileWatcher(); return }
             let isCurrent = generation == self.externalChangeGeneration
@@ -667,6 +706,7 @@ final class SettingsManager: ObservableObject {
     /// stopped. The watcher keeps running, so a write can no longer be lost.
     private func reloadChangedFile(url: URL, generation: UInt) {
         let counters = writeQueueCounters
+        let onDisk = lastKnownOnDisk
         Task { @MainActor [weak self] in
             guard let self else { return }
             let outcome = await Self.performExternalChangeIO(
@@ -674,7 +714,8 @@ final class SettingsManager: ObservableObject {
                 currentSettings: { @MainActor in self.settings },
                 fileExists: self.fileExists,
                 beforeRead: self.beforeRead,
-                writeQueueState: { counters.snapshot }
+                writeQueueState: { counters.snapshot },
+                onDisk: onDisk
             )
             guard self.settingsURL == url, generation == self.externalChangeGeneration else { return }
             self.applyExternalChangeOutcome(outcome)
@@ -689,14 +730,15 @@ final class SettingsManager: ObservableObject {
             if case .writeFailed? = lastError { break }
             clearError()
         case .success(.reloaded(let reloaded)):
-            // A failed write is still true: the file on disk is older than the
-            // settings in memory, so it must not overwrite them.
-            if case .writeFailed? = lastError { break }
+            // The file holds the newest settings, so the app adopts them.
+            lastKnownOnDisk.value = reloaded
             publish(reloaded)
             clearError()
         case .success(.recreated):
             // The file is written from the settings that are current when the
             // write runs, so a change that lands in the meantime is not lost.
+            // The file was deleted outside the app, so there is no content on
+            // the disk to remember until the write lands.
             enqueueWrite(to: settingsURL, createsDirectory: true)
             clearError()
         case .failure(let error):
@@ -714,7 +756,8 @@ final class SettingsManager: ObservableObject {
         currentSettings: @MainActor @Sendable () async -> WallpaperSettings,
         fileExists: @Sendable (URL) -> Bool,
         beforeRead: (@Sendable () -> Void)?,
-        writeQueueState: @Sendable () -> WriteQueueSnapshot
+        writeQueueState: @Sendable () -> WriteQueueSnapshot,
+        onDisk: SettingsBox<WallpaperSettings?>
     ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
         if fileExists(url) {
             do {
@@ -725,6 +768,10 @@ final class SettingsManager: ObservableObject {
                 // the file, so the change is noticed. The writes of the app
                 // count too: a change that is not on the disk yet is newer
                 // than the file, so the file must not overwrite it either.
+                // The content the app last knew on the disk counts too: a
+                // file that holds it carries nothing the app does not know,
+                // so the settings in memory stay. That is the case after a
+                // failed write, where the file still holds the older content.
                 let before = await currentSettings()
                 let writesBefore = writeQueueState()
                 beforeRead?()
@@ -733,6 +780,11 @@ final class SettingsManager: ObservableObject {
                 let writesAfter = writeQueueState()
                 if reloaded == before {
                     // The file still holds the settings we last knew.
+                    return .success(.unchanged)
+                }
+                if let known = onDisk.value, known == reloaded {
+                    // The file holds the content the app last knew on the
+                    // disk, so it carries nothing the app does not know.
                     return .success(.unchanged)
                 }
                 if after != before {
@@ -778,7 +830,7 @@ final class SettingsManager: ObservableObject {
     }
 
     /// Reports a failed write.
-    private func report(_ result: Result<Void, SettingsManagerError>) {
+    private func report(_ result: Result<WallpaperSettings, SettingsManagerError>) {
         if case .failure(let error) = result {
             report(error)
         }
@@ -839,15 +891,15 @@ private final class WriteQueueCounters: @unchecked Sendable {
 ///
 /// The main actor fills the box and the write queue reads it, so a lock
 /// guards it.
-private final class SettingsBox: @unchecked Sendable {
+private final class SettingsBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
-    private var stored: WallpaperSettings
+    private var stored: Value
 
-    init(_ settings: WallpaperSettings) {
-        stored = settings
+    init(_ value: Value) {
+        stored = value
     }
 
-    var value: WallpaperSettings {
+    var value: Value {
         get {
             lock.lock()
             defer { lock.unlock() }
