@@ -918,6 +918,70 @@ final class SettingsManagerTests: XCTestCase {
         )
     }
 
+    /// The reload must not revert a change whose write is still queued.
+    ///
+    /// The file holds the old settings while the write waits, so the file is
+    /// older than the settings in memory. The reload must not adopt it: the
+    /// queued write puts the change on the disk.
+    func testTheReloadKeepsTheChangeWhoseWriteIsStillQueued() async throws {
+        let context = try TestSettingsContext()
+        let writeGate = WriteGate()
+        let readGate = ReadGate()
+        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
+        try encoded(original).write(to: settingsURL)
+        let manager = context.makeSettingsManager(
+            beforeWrite: { writeGate.beforeWrite() },
+            beforeRead: { readGate.beforeRead() }
+        )
+        XCTAssertEqual(manager.settings, original)
+
+        // The write waits, so the file keeps the old settings while the
+        // change is in memory and its write is queued.
+        writeGate.pauseTheNextWrite()
+        let newer = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/y.jpg")
+        manager.replace(newer)
+        await writeGate.waitUntilTheWriteWaits()
+
+        // The watcher reads the file, so the reload runs.
+        readGate.pauseTheNextRead()
+        try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: settingsURL.path)
+        let reading = await readGate.waitUntilTheReadWaits()
+        XCTAssertTrue(reading, "The reload should read the settings file")
+        guard reading else {
+            // The write would wait for ever otherwise.
+            writeGate.resumeTheWrite()
+            return
+        }
+
+        // The reload publishes the file when it adopts it, so the write is
+        // released with the publish.
+        var published = false
+        let subscription = manager.settingsPublisher.dropFirst().sink { _ in
+            published = true
+            writeGate.resumeTheWrite()
+        }
+        defer { subscription.cancel() }
+        readGate.resumeTheRead()
+
+        // Nothing is published when the change is kept, so the write is
+        // released after a moment.
+        _ = await waitUntil({ published }, timeout: 0.5)
+        writeGate.resumeTheWrite()
+        await manager.waitForPendingWrites()
+
+        XCTAssertEqual(
+            manager.settings.currentWallpaper,
+            "/wallpapers/y.jpg",
+            "The change must stay in memory"
+        )
+        XCTAssertEqual(
+            try decodeSettings(at: settingsURL).currentWallpaper,
+            "/wallpapers/y.jpg",
+            "The change must stay on disk"
+        )
+    }
+
     /// A file that was changed outside the app is reloaded: the change is
     /// newer than the settings in memory, and no change landed during the
     /// read of the file.

@@ -95,6 +95,13 @@ final class SettingsManager: ObservableObject {
     /// write, and the queue is serial, so two writes cannot interleave into a
     /// corrupt file.
     private let writeQueue = DispatchQueue(label: "com.wallpaper-selector.settings.write", qos: .utility)
+    /// Counts the writes of the settings file.
+    ///
+    /// The reload has to know whether a change of the app is still on its way
+    /// to the disk: a file that is older than the settings in memory must
+    /// not overwrite them. The write queue fills the counters and the reload
+    /// reads them, so a lock guards them.
+    private let writeQueueCounters = WriteQueueCounters()
     /// Called before the settings file is written.
     ///
     /// The closure runs on the write queue. It is the seam a test uses to
@@ -446,6 +453,8 @@ final class SettingsManager: ObservableObject {
     private func enqueueWrite(to url: URL, createsDirectory: Bool = false) {
         let settings = currentSettings
         let beforeWrite = self.beforeWrite
+        let counters = writeQueueCounters
+        counters.writeEnqueued()
         writeQueue.async { [weak self] in
             let result = Self.performWrite(
                 settings,
@@ -453,6 +462,9 @@ final class SettingsManager: ObservableObject {
                 createsDirectory: createsDirectory,
                 beforeWrite: beforeWrite
             )
+            // The write has landed, so the file holds the settings that were
+            // current when it ran.
+            counters.writeLanded()
             Task { @MainActor [weak self] in
                 self?.finishWrite(result)
             }
@@ -624,6 +636,7 @@ final class SettingsManager: ObservableObject {
         let modificationDateBeforeIO = modificationDate(of: url)
         externalChangeGeneration &+= 1
         let generation = externalChangeGeneration
+        let counters = writeQueueCounters
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -631,7 +644,8 @@ final class SettingsManager: ObservableObject {
                 url: url,
                 currentSettings: { @MainActor in self.settings },
                 fileExists: self.fileExists,
-                beforeRead: self.beforeRead
+                beforeRead: self.beforeRead,
+                writeQueueState: { counters.snapshot }
             )
             guard self.settingsURL == url else { self.startFileWatcher(); return }
             let isCurrent = generation == self.externalChangeGeneration
@@ -652,13 +666,15 @@ final class SettingsManager: ObservableObject {
     /// Reads the file again after a change that landed while the watcher was
     /// stopped. The watcher keeps running, so a write can no longer be lost.
     private func reloadChangedFile(url: URL, generation: UInt) {
+        let counters = writeQueueCounters
         Task { @MainActor [weak self] in
             guard let self else { return }
             let outcome = await Self.performExternalChangeIO(
                 url: url,
                 currentSettings: { @MainActor in self.settings },
                 fileExists: self.fileExists,
-                beforeRead: self.beforeRead
+                beforeRead: self.beforeRead,
+                writeQueueState: { counters.snapshot }
             )
             guard self.settingsURL == url, generation == self.externalChangeGeneration else { return }
             self.applyExternalChangeOutcome(outcome)
@@ -697,7 +713,8 @@ final class SettingsManager: ObservableObject {
         url: URL,
         currentSettings: @MainActor @Sendable () async -> WallpaperSettings,
         fileExists: @Sendable (URL) -> Bool,
-        beforeRead: (@Sendable () -> Void)?
+        beforeRead: (@Sendable () -> Void)?,
+        writeQueueState: @Sendable () -> WriteQueueSnapshot
     ) async -> Result<ExternalChangeOutcome, SettingsManagerError> {
         if fileExists(url) {
             do {
@@ -705,11 +722,15 @@ final class SettingsManager: ObservableObject {
                 // a change that lands while the file is read is newer than
                 // the snapshot, so the snapshot must not overwrite it. The
                 // settings in memory are read before and after the read of
-                // the file, so the change is noticed.
+                // the file, so the change is noticed. The writes of the app
+                // count too: a change that is not on the disk yet is newer
+                // than the file, so the file must not overwrite it either.
                 let before = await currentSettings()
+                let writesBefore = writeQueueState()
                 beforeRead?()
                 let reloaded = try Self.loadSettings(from: url)
                 let after = await currentSettings()
+                let writesAfter = writeQueueState()
                 if reloaded == before {
                     // The file still holds the settings we last knew.
                     return .success(.unchanged)
@@ -720,9 +741,20 @@ final class SettingsManager: ObservableObject {
                     // overwrite them. The queued write persists the change.
                     return .success(.unchanged)
                 }
-                // The file holds something else and the settings in memory
-                // did not move while it was read, so the file was changed
-                // outside the app.
+                if writesAfter.pendingWrites > 0 {
+                    // A change of the app is not on the disk yet, so the file
+                    // is older than the settings in memory. The queued write
+                    // puts the change on the disk.
+                    return .success(.unchanged)
+                }
+                if writesAfter.completedWrites != writesBefore.completedWrites {
+                    // A write landed while the file was read: the file can
+                    // hold a value that is older than the settings in memory.
+                    return .success(.unchanged)
+                }
+                // The file holds something else, the settings in memory did
+                // not move while it was read and no write of the app is on
+                // its way, so the file was changed outside the app.
                 return .success(.reloaded(reloaded))
             } catch let error as SettingsManagerError {
                 return .failure(error)
@@ -760,6 +792,46 @@ final class SettingsManager: ObservableObject {
             return
         }
         lastError = nil
+    }
+}
+
+/// The state of the write queue at a moment in time.
+private struct WriteQueueSnapshot: Sendable, Equatable {
+    /// The writes that are enqueued but have not landed yet.
+    let pendingWrites: Int
+    /// The writes that landed since the app started.
+    let completedWrites: Int
+}
+
+/// Counts the writes of the settings file.
+///
+/// The write queue fills the counters and the reload reads them, so a lock
+/// guards them.
+private final class WriteQueueCounters: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = 0
+    private var completed = 0
+
+    /// A write was enqueued and has not landed yet.
+    func writeEnqueued() {
+        lock.lock()
+        pending += 1
+        lock.unlock()
+    }
+
+    /// The write landed, so the file holds the settings of that moment.
+    func writeLanded() {
+        lock.lock()
+        pending -= 1
+        completed += 1
+        lock.unlock()
+    }
+
+    /// The counters at this moment.
+    var snapshot: WriteQueueSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return WriteQueueSnapshot(pendingWrites: pending, completedWrites: completed)
     }
 }
 
