@@ -17,9 +17,10 @@ jobs:
       # create-dmg flag, a broken hdiutil convert or a wrong checksum name
       # would only be found at release time. This step runs the same recipe
       # on every push.
-      # The step is NOT a gate: an environment-specific create-dmg or Finder
-      # failure on the runner must never turn CI red, so the step reports
-      # early signal only.
+      # The step is NOT a gate: the release flags drive the Finder layout of
+      # the window through AppleScript, and that needs a usable GUI session.
+      # A runner without one fails the step, so it reports early signal only.
+      # The release job runs the same recipe, and there it has to pass.
       - name: Build release artifacts
         continue-on-error: true
         env:
@@ -34,13 +35,17 @@ jobs:
       # This step runs the recipe with the default flags, so the branch runs.
       # The version and the build number are different from the step above,
       # so the two steps cannot write the same artifact names.
-      # The step is NOT a gate: it is a signal that the conversion still
-      # works, so a failure must never turn CI red.
+      # The step IS a gate: `--skip-jenkins` is the only create-dmg flag that
+      # skips the Finder layout, so the recipe needs no GUI session here.
+      # `--skip-finalize` alone does not skip it, it only leaves a writable
+      # disk image behind, so the layout would still be driven.
+      # The `shasum -c` check is the other half of the gate: a checksum file
+      # that names another file fails here and not in the download of a user.
       - name: Build release artifacts with the default finalize flags
-        continue-on-error: true
         env:
           VERSION: 0.0.0-ci-convert
           BUILD_NUMBER: 1
         run: |
           brew install create-dmg
-          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER"
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS='--skip-finalize --skip-jenkins'
+          cd release && shasum -a 256 -c "WallpaperSelector-$VERSION.dmg.sha256"
