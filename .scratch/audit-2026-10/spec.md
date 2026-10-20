@@ -51,6 +51,16 @@ that was imported is renamed to `settings.json.migrated`, and a legacy file
 that was never imported is reported on every launch, so it cannot be
 forgotten.
 
+The round after that closed the last three findings. The menu of the menu bar
+item is built once and updated in place, so a menu that is already open shows
+the new state and a click on it always runs the current action. The state of
+the menu comes from one place, the view model, so the mapping from the view
+model to the menu is a single function that a test can call without a status
+item in the menu bar of the machine. The preview popover takes the height of
+its content and is clamped to the visible frame of the display, and its body
+scrolls, so it fits on a short display and every control stays reachable. The
+enablement of the items of the menu is covered by a test now.
+
 ## Deferred work
 
 The tickets in `issues/` are the deliberate remainder of the audit. None of
@@ -59,10 +69,8 @@ deferred, and what "done" would look like. A ticket that will not be
 actioned is labelled `wontfix`, a ticket that needs a product decision
 `ready-for-human`, and the rest `ready-for-agent`.
 
-Three tickets are still open:
-
-- 07 — an open menu bar menu is not updated in place
-- 10 — there is no UI test harness
-- 12 — the preview popover is taller than a short display
-
-All three tickets are `ready-for-agent`.
+No ticket is left: the `issues/` folder is gone, so the audit has no open
+finding. The parts that no test can cover are written down in the code
+instead: the SwiftUI wiring of the enabled state and the presentation of a
+live status item carry a `shortcut:` comment in the three views that bind the
+enabled state, so the gap is visible where the code is.
