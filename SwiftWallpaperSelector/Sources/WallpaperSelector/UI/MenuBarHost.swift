@@ -2,18 +2,6 @@ import AppKit
 import SwiftUI
 
 @MainActor
-struct MenuBarHost: NSViewControllerRepresentable {
-    let appState: AppState
-    let settingsViewModel: SettingsViewModel
-
-    func makeNSViewController(context: Context) -> MenuBarHostingViewController {
-        MenuBarHostingViewController(appState: appState, settingsViewModel: settingsViewModel)
-    }
-
-    func updateNSViewController(_ controller: MenuBarHostingViewController, context: Context) {}
-}
-
-@MainActor
 final class MenuBarHostingViewController: NSViewController {
     private let appState: AppState
     private let settingsViewModel: SettingsViewModel

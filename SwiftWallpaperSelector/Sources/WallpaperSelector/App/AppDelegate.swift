@@ -8,11 +8,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = icon
         }
     }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            NotificationCenter.default.post(name: .OpenMainWindowRequested, object: nil)
-        }
-        return true
-    }
 }

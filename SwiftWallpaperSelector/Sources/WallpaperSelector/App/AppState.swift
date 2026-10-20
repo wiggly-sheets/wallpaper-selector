@@ -82,21 +82,8 @@ final class AppState: ObservableObject {
         !effectiveFolders.isEmpty
     }
 
-    func effectiveAppearanceWallpapers(isDarkAppearance: Bool) -> (light: String?, dark: String?) {
-        themeProvider.effectiveAppearanceWallpapers(isDarkAppearance: isDarkAppearance)
-    }
-
     func updateSettings(_ mutation: (inout WallpaperSettings) -> Void) {
         settingsManager.update(mutation)
-    }
-
-    func reloadDerivedState() {
-        Task { [weak self] in
-            guard let self else { return }
-            await wallpaperLibrary.invalidate()
-            guard !Task.isCancelled else { return }
-            refreshDerivedState()
-        }
     }
 
     func setWallpaper(_ path: String) {
