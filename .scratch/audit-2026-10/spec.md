@@ -37,8 +37,8 @@ lost. The sheet of the Appearance dialog sizes itself to its content, the
 body scrolls and the OK button stays outside the scrolling area, and the
 tests measure the sheet. The rotation controls of the Settings window bind to
 a property that states the effect, so no view has to negate it. The tickets
-of the closed findings are deleted, so only the tickets of the findings that
-are still open are left in `issues/`.
+of the closed findings are deleted, so the `issues/` folder of the audit is
+gone.
 
 The round after that closed five more findings. The settings file of the old
 folder is renamed to `settings.json.migrated` when the settings location

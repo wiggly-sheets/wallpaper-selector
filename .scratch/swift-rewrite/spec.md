@@ -44,4 +44,8 @@ Create a new Xcode/Swift Package Manager project that contains a single macOS ap
 - The settings file will be watched for external changes (using a `DispatchSourceFileSystemObject`) so that manual edits are reflected immediately.
 - Upon first launch, if a settings file is detected in the legacy Electron location, it will be copied to the new location (Application Support) and a migration notice logged.
 
+## Tickets
+
+The tickets of the rewrite live in `issues/`. The work of 01 and 02 is done and tested, so both tickets are deleted. The ticket 03 stays: its last criterion is a manual check on a real screen, and no test can cover it. The ticket 04 stays as well, with the same manual validation open.
+
 </file>
