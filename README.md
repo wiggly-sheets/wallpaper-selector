@@ -131,7 +131,8 @@ or usage data.
 ## Releases and Homebrew
 
 Pushing tag `vX.Y.Z` runs release workflow, builds DMG plus SHA-256 checksum,
-and publishes GitHub release. The
+and publishes GitHub release. The release notes are the section of
+[CHANGELOG.md](CHANGELOG.md) for the released version. The
 [wiggly-sheets/homebrew-tap](https://github.com/wiggly-sheets/homebrew-tap)
 repository renders its own cask from its own template and follows the latest
 stable release, so a release needs no manual copy into the tap.

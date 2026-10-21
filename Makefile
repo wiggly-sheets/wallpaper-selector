@@ -62,6 +62,8 @@ help:
 		'  WallpaperSelector-<version>.dmg.sha256. The names must not change, because the' \
 		'  Homebrew tap matches the assets by name.' \
 		'  The checksum file holds one line per asset: the digest, two spaces, the bare file name.' \
+		'  The release notes come from the section of CHANGELOG.md for the version. A version' \
+		'  without a section fails the release.' \
 		'  `make release` refuses a dirty working tree and a version whose tag already exists.' \
 		'  It creates an annotated local tag, it prints the push command and it never pushes.' \
 		'  Signing stays ad-hoc: identity "-", no certificate, no notarization.' \
