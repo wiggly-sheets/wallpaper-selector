@@ -24,6 +24,14 @@ struct SystemAppearanceProvider: SystemAppearanceProviding {
 final class AppearanceMonitor: NSObject {
     typealias WallpaperDiscovery = @Sendable ([String]) async -> [URL]
 
+    /// The name of the notification that reports a change of the appearance.
+    ///
+    /// The name is a parameter of the monitor, so a test can listen to a
+    /// name that no system notification uses. Every observer of the
+    /// distributed centre receives the real notification, so a test that
+    /// listens to it breaks when the appearance of the machine changes.
+    nonisolated static let appearanceNotificationName = Notification.Name("AppleInterfaceThemeChangedNotification")
+
     var onAppearanceChanged: ((String?) -> Void)?
 
     /// Reports every appearance change, even when no wallpaper was applied.
@@ -52,7 +60,8 @@ final class AppearanceMonitor: NSObject {
         fileManager: FileManager = .default,
         wallpaperLibrary: WallpaperLibrary = .shared,
         discoverWallpapers: WallpaperDiscovery? = nil,
-        notificationCenter: DistributedNotificationCenter = .default()
+        notificationCenter: DistributedNotificationCenter = .default(),
+        notificationName: Notification.Name = AppearanceMonitor.appearanceNotificationName
     ) {
         self.settingsManager = settingsManager
         self.wallpaperProvider = wallpaperProvider
@@ -68,7 +77,7 @@ final class AppearanceMonitor: NSObject {
         notificationCenter.addObserver(
             self,
             selector: #selector(systemAppearanceDidChange),
-            name: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            name: notificationName,
             object: nil,
             suspensionBehavior: .deliverImmediately
         )

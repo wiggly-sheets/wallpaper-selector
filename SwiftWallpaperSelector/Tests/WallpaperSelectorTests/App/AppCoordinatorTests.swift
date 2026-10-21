@@ -390,6 +390,52 @@ final class AppCoordinatorTests: XCTestCase {
         )
     }
 
+    /// The app is an accessory app without a key window, so the screen with
+    /// the key can be missing. The other screens still report their
+    /// wallpaper, so the wallpaper on the screen is found anyway.
+    func testTheWallpaperOfAnotherScreenIsUsedWhenNoScreenHasTheKey() throws {
+        let wallpaper = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/on-screen.jpg")
+
+        let url = AppCoordinator.currentDesktopImageURL(screens: [
+            FakeDesktopScreen(wallpaper: nil),
+            FakeDesktopScreen(wallpaper: wallpaper),
+        ])
+
+        XCTAssertEqual(url, wallpaper, "The wallpaper of a screen has to be found")
+    }
+
+    /// No screen reports a wallpaper: the wallpaper of the settings is the
+    /// fallback.
+    func testNoWallpaperIsFoundWhenNoScreenReportsOne() throws {
+        let url = AppCoordinator.currentDesktopImageURL(screens: [FakeDesktopScreen(wallpaper: nil)])
+
+        XCTAssertNil(url)
+    }
+
+    /// The appearance of the machine can change while the suite runs. Every
+    /// observer of the distributed centre receives the real notification, so
+    /// the coordinator of the test has to listen to another name.
+    func testTheRealAppearanceNotificationDoesNotReachTheCoordinator() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: RecordingAllSpacesApplier()
+        )
+        defer { _ = coordinator }
+        var reportCount = 0
+        coordinator.appearanceMonitor.onSystemAppearanceChanged = { reportCount += 1 }
+
+        DistributedNotificationCenter.default().post(
+            name: AppearanceMonitor.appearanceNotificationName,
+            object: nil
+        )
+        // The notification is delivered right away, so a moment is enough.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(reportCount, 0, "The real notification must not disturb the test")
+    }
+
     /// The coordinator of a test.
     ///
     /// The applier is always the double: the real one writes the store of
@@ -409,6 +455,7 @@ final class AppCoordinatorTests: XCTestCase {
             injectedWallpaperProvider: wallpaperProvider,
             allSpacesApplier: applier,
             injectedDesktopImageURL: desktopImageURL,
+            notificationName: TestNotifications.appearanceChanged,
             startsMenuBar: false
         )
     }
@@ -460,6 +507,18 @@ final class RecordingAllSpacesApplier: AllSpacesApplier {
         } else {
             onResult?(.success(()))
         }
+    }
+}
+
+/// A screen of a Mac that reports a wallpaper.
+///
+/// The screens of macOS cannot be built in a test.
+@MainActor
+final class FakeDesktopScreen: DesktopScreenProviding {
+    var desktopImageURL: URL?
+
+    init(wallpaper: URL?) {
+        self.desktopImageURL = wallpaper
     }
 }
 

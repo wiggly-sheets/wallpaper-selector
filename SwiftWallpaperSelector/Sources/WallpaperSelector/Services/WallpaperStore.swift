@@ -94,6 +94,11 @@ struct WallpaperStore {
     /// The rename is only durable when the folder is flushed, too.
     var flushFolder: (URL) -> Void = WallpaperStore.flushFolderToDisk
 
+    /// Renames the file over the old one.
+    ///
+    /// The closure is the seam a test uses to see when the rename happens.
+    var renameFile: (String, String) -> Int32 = { rename($0, $1) }
+
     /// Reads the store.
     func read(at url: URL) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -147,7 +152,7 @@ struct WallpaperStore {
             throw WallpaperStoreError.writeFailed(path: url.path, reason: error.localizedDescription)
         }
 
-        guard rename(temporary.path, url.path) == 0 else {
+        guard renameFile(temporary.path, url.path) == 0 else {
             let reason = String(cString: strerror(errno))
             try? FileManager.default.removeItem(at: temporary)
             throw WallpaperStoreError.renameFailed(path: url.path, reason: reason)
@@ -181,10 +186,17 @@ struct WallpaperStore {
     // MARK: - The wallpaper
 
     /// Writes the wallpaper into the store file.
-    func setWallpaper(_ imageURL: URL, inStoreAt url: URL) throws {
+    ///
+    /// The result names the containers that hold a wallpaper the app cannot
+    /// write. The wallpaper of such a container stays the old one, so the
+    /// wallpaper does not reach that Space.
+    @discardableResult
+    func setWallpaper(_ imageURL: URL, inStoreAt url: URL) throws -> [String] {
         var store = try read(at: url)
         try setWallpaper(imageURL, in: &store)
+        let unwritable = unwritableWallpaperPaths(in: store)
         try write(store, to: url)
+        return unwritable
     }
 
     /// Writes the wallpaper into the store.
@@ -249,19 +261,97 @@ struct WallpaperStore {
     /// The wallpaper of the global container, as it is written in the store.
     func wallpaperURL(in store: [String: Any]) -> URL? {
         guard let container = store[Key.globalContainer] as? [String: Any] else { return nil }
+        return Self.wallpaperURL(inContainer: container)
+    }
+
+    /// The wallpaper of a container.
+    private static func wallpaperURL(inContainer container: [String: Any]) -> URL? {
         for name in Slot.desktopPicture {
             guard let slot = container[name] as? [String: Any] else { continue }
-            if let url = Self.wallpaperURL(inSlot: slot) { return url }
+            if let url = wallpaperURL(inSlot: slot) { return url }
         }
         return nil
     }
 
-    /// Whether the store file holds the wallpaper in the global container.
-    func holdsWallpaper(_ imageURL: URL, inStoreAt url: URL) -> Bool {
-        guard let store = try? read(at: url),
-              let stored = wallpaperURL(in: store)
+    /// Whether every container of the store holds the wallpaper.
+    ///
+    /// The global container has to hold the wallpaper and every container
+    /// that has a slot of the desktop picture has to hold it too: a Space
+    /// that keeps its old wallpaper is a Space the wallpaper did not reach.
+    func holdsWallpaper(_ imageURL: URL, in store: [String: Any]) -> Bool {
+        let expected = imageURL.standardizedFileURL.path
+        guard let global = store[Key.globalContainer] as? [String: Any],
+              let globalURL = Self.wallpaperURL(inContainer: global),
+              globalURL.standardizedFileURL.path == expected
         else { return false }
-        return stored.standardizedFileURL.path == imageURL.standardizedFileURL.path
+        for entry in containers(in: store) {
+            for name in Slot.desktopPicture {
+                guard let slot = entry.container[name] as? [String: Any] else { continue }
+                guard let url = Self.wallpaperURL(inSlot: slot),
+                      url.standardizedFileURL.path == expected else { return false }
+            }
+        }
+        return true
+    }
+
+    /// Whether the store file holds the wallpaper in every container.
+    func holdsWallpaper(_ imageURL: URL, inStoreAt url: URL) -> Bool {
+        guard let store = try? read(at: url) else { return false }
+        return holdsWallpaper(imageURL, in: store)
+    }
+
+    /// The paths of the containers that hold a wallpaper the app cannot write.
+    ///
+    /// The app writes the slots of the desktop picture. The wallpaper of a
+    /// container that holds its wallpaper in another slot stays the old one,
+    /// so the wallpaper does not reach that Space. The app says so instead
+    /// of claiming that the wallpaper is on every Space.
+    func unwritableWallpaperPaths(in store: [String: Any]) -> [String] {
+        containers(in: store).compactMap { entry in
+            guard let name = Self.unwritableSlot(in: entry.container) else { return nil }
+            return "\(entry.path).\(name)"
+        }
+    }
+
+    /// Every container of the store with its path.
+    ///
+    /// The containers are the ones the patch writes: the global one, the
+    /// system default, every Space and every Display.
+    private func containers(in store: [String: Any]) -> [(path: String, container: [String: Any])] {
+        var result: [(path: String, container: [String: Any])] = []
+        for key in [Key.globalContainer, Key.systemDefault] {
+            guard let container = store[key] as? [String: Any] else { continue }
+            result.append((path: key, container: container))
+        }
+        for key in [Key.spaces, Key.displays] {
+            guard let map = store[key] as? [String: Any] else { continue }
+            for (id, value) in map {
+                guard let container = value as? [String: Any] else { continue }
+                result.append((path: "\(key).\(id)", container: container))
+                guard let displays = container[Key.displays] as? [String: Any] else { continue }
+                for (displayID, display) in displays {
+                    guard let displayContainer = display as? [String: Any] else { continue }
+                    result.append((
+                        path: "\(key).\(id).\(Key.displays).\(displayID)",
+                        container: displayContainer
+                    ))
+                }
+            }
+        }
+        return result
+    }
+
+    /// The slot of a container that holds a wallpaper the app does not write.
+    ///
+    /// The idle slot holds the wallpaper of the idle screen, so it is left
+    /// alone and never counts.
+    private static func unwritableSlot(in container: [String: Any]) -> String? {
+        for name in container.keys.sorted() {
+            guard name != Slot.idle, !Slot.desktopPicture.contains(name) else { continue }
+            guard let slot = container[name] as? [String: Any] else { continue }
+            if wallpaperURL(inSlot: slot) != nil { return name }
+        }
+        return nil
     }
 
     // MARK: - The shape of the store

@@ -211,7 +211,15 @@ struct TrayPopoverView: View {
 
 struct TrayPopoverView_Previews: PreviewProvider {
     static var previews: some View {
-        let settingsManager = SettingsManager()
+        // The preview must not touch the settings of the user: the manager
+        // writes a settings file and can import the legacy file of the
+        // Electron version. The preview uses a folder of its own.
+        let previewDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WallpaperSelectorPreview", isDirectory: true)
+        let settingsManager = SettingsManager(
+            settingsDirectory: previewDirectory,
+            migrateLegacySettings: false
+        )
         let wallpaperProvider = WallpaperProvider()
         let themeProvider = ThemeProvider(settingsManager: settingsManager)
 

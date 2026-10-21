@@ -90,6 +90,17 @@ private enum TestSettingsContextError: Error {
     case couldNotCreateUserDefaults
 }
 
+/// The names of the notifications the tests use.
+///
+/// Every observer of the distributed centre receives the real notification
+/// of macOS, so a test that listens to it breaks when the appearance of the
+/// machine changes while the suite runs. The tests listen to a name that
+/// nothing posts.
+enum TestNotifications {
+    /// The change of the appearance of the system.
+    static let appearanceChanged = Notification.Name("WallpaperSelectorTests.appearanceChanged")
+}
+
 @MainActor
 final class MockWallpaperProvider: WallpaperSetting {
     private(set) var appliedURLs: [URL] = []

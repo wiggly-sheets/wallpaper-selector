@@ -13,11 +13,6 @@ private final class MutableSystemAppearance: SystemAppearanceProviding {
     }
 }
 
-/// A private center: the real macOS appearance notifications never reach it.
-private func makePrivateNotificationCenter() -> DistributedNotificationCenter {
-    DistributedNotificationCenter()
-}
-
 @MainActor
 private final class RecordingWallpaperProvider: WallpaperSetting {
     private(set) var calls: [URL] = []
@@ -99,7 +94,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: themeProvider,
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
 
         monitor.applyAppearanceWallpaperIfNeeded()
@@ -135,7 +130,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: themeProvider,
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
 
         monitor.applyAppearanceWallpaperIfNeeded()
@@ -177,7 +172,7 @@ final class AppearanceMonitorTests: XCTestCase {
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
             discoverWallpapers: { _ in [fallback] },
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
         monitor.onAppearanceChanged = { _ in applied.fulfill() }
 
@@ -210,7 +205,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: appearance,
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
 
         monitor.applyAppearanceWallpaperIfNeeded()
@@ -242,7 +237,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
 
         monitor.applyAppearanceWallpaperIfNeeded()
@@ -290,7 +285,7 @@ final class AppearanceMonitorTests: XCTestCase {
                 }
                 return [darkImage]
             },
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
         monitor.onAppearanceChanged = { path in
             if path == darkImage.path { darkApplied.fulfill() }
@@ -320,7 +315,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: RecordingWallpaperProvider(),
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: false),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
         var reportCount = 0
         monitor.onSystemAppearanceChanged = { reportCount += 1 }
@@ -328,6 +323,38 @@ final class AppearanceMonitorTests: XCTestCase {
         monitor.applyAppearanceWallpaperIfNeeded()
 
         XCTAssertEqual(reportCount, 1)
+    }
+
+    /// The appearance of the machine can change while the suite runs.
+    /// Every observer of the distributed centre receives the real
+    /// notification, so the monitor of the test has to listen to another
+    /// name.
+    @MainActor
+    func testTheRealAppearanceNotificationDoesNotReachTheMonitor() async throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = makeSettingsManager(in: directory)
+        let monitor = AppearanceMonitor(
+            settingsManager: manager,
+            wallpaperProvider: RecordingWallpaperProvider(),
+            themeProvider: ThemeProvider(settingsManager: manager),
+            appearanceProvider: FixedSystemAppearance(isDarkAppearance: false),
+            notificationName: TestNotifications.appearanceChanged
+        )
+        var reportCount = 0
+        monitor.onSystemAppearanceChanged = { reportCount += 1 }
+
+        monitor.applyAppearanceWallpaperIfNeeded()
+        XCTAssertEqual(reportCount, 1)
+
+        DistributedNotificationCenter.default().post(
+            name: AppearanceMonitor.appearanceNotificationName,
+            object: nil
+        )
+        // The notification is delivered right away, so a moment is enough.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(reportCount, 1, "The real notification must not disturb the test")
     }
 
     /// The wallpaper reached one of the two displays, so it is on the screen
@@ -355,7 +382,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
 
         monitor.applyAppearanceWallpaperIfNeeded()
@@ -389,7 +416,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
         var reportedErrors: [String] = []
         monitor.onError = { reportedErrors.append($0) }
@@ -428,7 +455,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
         var reportedErrors: [String] = []
         monitor.onError = { reportedErrors.append($0) }
@@ -463,7 +490,7 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider: wallpaperProvider,
             themeProvider: ThemeProvider(settingsManager: manager),
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationCenter: makePrivateNotificationCenter()
+            notificationName: TestNotifications.appearanceChanged
         )
         var reportedPaths: [String?] = []
         monitor.onAppearanceChanged = { reportedPaths.append($0) }

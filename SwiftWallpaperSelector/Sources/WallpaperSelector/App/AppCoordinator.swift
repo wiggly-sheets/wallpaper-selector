@@ -2,6 +2,22 @@ import AppKit
 import Combine
 import Foundation
 
+/// A screen of the Mac that can report the wallpaper it shows.
+///
+/// The protocol is the seam a test uses: the screens of macOS cannot be
+/// built in a test.
+@MainActor
+protocol DesktopScreenProviding: AnyObject {
+    /// The wallpaper of the screen.
+    var desktopImageURL: URL? { get }
+}
+
+extension NSScreen: DesktopScreenProviding {
+    var desktopImageURL: URL? {
+        NSWorkspace.shared.desktopImageURL(for: self)
+    }
+}
+
 @MainActor
 final class AppCoordinator: ObservableObject {
     let settingsManager: SettingsManager
@@ -25,8 +41,11 @@ final class AppCoordinator: ObservableObject {
             settingsManager: SettingsManager(),
             injectedHotKeyManager: nil,
             injectedWallpaperProvider: nil,
-            allSpacesApplier: AllSpacesApplier(),
-            injectedDesktopImageURL: AppCoordinator.currentDesktopImageURL,
+            allSpacesApplier: AllSpacesApplier(
+                storeURL: WallpaperStore.defaultStoreURL,
+                agent: .live
+            ),
+            injectedDesktopImageURL: { AppCoordinator.currentDesktopImageURL() },
             startsMenuBar: true
         )
     }
@@ -36,7 +55,8 @@ final class AppCoordinator: ObservableObject {
         injectedHotKeyManager: HotKeyManager?,
         injectedWallpaperProvider: WallpaperSetting? = nil,
         allSpacesApplier: AllSpacesApplier,
-        injectedDesktopImageURL: @escaping @MainActor () -> URL? = AppCoordinator.currentDesktopImageURL,
+        injectedDesktopImageURL: @escaping @MainActor () -> URL? = { AppCoordinator.currentDesktopImageURL() },
+        notificationName: Notification.Name = AppearanceMonitor.appearanceNotificationName,
         startsMenuBar: Bool
     ) {
         let applier = allSpacesApplier
@@ -58,7 +78,8 @@ final class AppCoordinator: ObservableObject {
         let appearanceMonitor = AppearanceMonitor(
             settingsManager: settingsManager,
             wallpaperProvider: wallpaperProvider,
-            themeProvider: themeProvider
+            themeProvider: themeProvider,
+            notificationName: notificationName
         )
         let launchAtLoginManager = LaunchAtLoginManager()
         let appState = AppState(
@@ -198,11 +219,23 @@ final class AppCoordinator: ObservableObject {
         return URL(fileURLWithPath: path)
     }
 
-    /// The wallpaper of the main screen.
+    /// The wallpaper of the screen of the Mac.
+    ///
+    /// The app is an accessory app without a key window, so the screen with
+    /// the key can be missing: the user turns All Spaces on from the menu
+    /// bar while no window has the key. Every screen is asked in turn, so
+    /// the wallpaper of a screen that shows one is found.
+    ///
+    /// The screens are a parameter, so a test can ask for the wallpaper
+    /// without a Mac in front of it.
     @MainActor
-    static func currentDesktopImageURL() -> URL? {
-        guard let screen = NSScreen.main else { return nil }
-        return NSWorkspace.shared.desktopImageURL(for: screen)
+    static func currentDesktopImageURL(
+        screens: [DesktopScreenProviding] = NSScreen.screens.map { $0 as DesktopScreenProviding }
+    ) -> URL? {
+        for screen in screens {
+            if let url = screen.desktopImageURL { return url }
+        }
+        return nil
     }
 
     private func startMenuBar() {

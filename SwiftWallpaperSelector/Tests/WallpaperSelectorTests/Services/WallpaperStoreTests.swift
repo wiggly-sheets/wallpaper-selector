@@ -48,10 +48,10 @@ private enum StoreFixture {
         ]
     }
 
-    static func container() -> [String: Any] {
+    static func container(wallpaperPath: String = imagePath) -> [String: Any] {
         [
             "Type": "individual",
-            "Desktop": slot(path: imagePath),
+            "Desktop": slot(path: wallpaperPath),
             "Idle": slot(path: idlePath, withColor: true),
         ]
     }
@@ -285,28 +285,50 @@ final class WallpaperStoreTests: XCTestCase {
         )
     }
 
+    /// The verification has to cover every container of the store and not
+    /// only the global one: a Space that keeps its old wallpaper is a Space
+    /// the wallpaper did not reach.
+    func testTheVerificationChecksEveryContainerAndNotOnlyTheGlobalOne() throws {
+        let space: [String: Any] = ["Default": StoreFixture.slot(path: StoreFixture.imagePath)]
+        var store = StoreFixture.store(spaces: ["space-uuid": space])
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+        // The global container holds the new wallpaper, the Space holds the
+        // old one.
+        store["AllSpacesAndDisplays"] = StoreFixture.container(wallpaperPath: imageURL.path)
+        let url = try writeFixture(store)
+
+        XCTAssertFalse(
+            WallpaperStore().holdsWallpaper(imageURL, inStoreAt: url),
+            "A Space that keeps its old wallpaper is a Space the wallpaper did not reach"
+        )
+    }
+
     /// The store must survive a crash: the file is flushed before the
     /// rename and the folder after it.
     func testTheStoreIsFlushedBeforeAndAfterTheRename() throws {
-        var flushedFiles: [String] = []
-        var flushedFolders: [String] = []
+        var events: [String] = []
         var store = WallpaperStore()
-        store.flushFile = { url in flushedFiles.append(url.lastPathComponent) }
-        store.flushFolder = { url in flushedFolders.append(url.lastPathComponent) }
+        store.flushFile = { url in events.append("file:\(url.lastPathComponent)") }
+        store.renameFile = { source, target in
+            events.append("rename")
+            return rename(source, target)
+        }
+        store.flushFolder = { url in events.append("folder:\(url.lastPathComponent)") }
         let url = try writeFixture(StoreFixture.store())
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
 
         try store.setWallpaper(imageURL, inStoreAt: url)
 
-        XCTAssertEqual(flushedFiles.count, 1, "The file must be flushed before the rename")
+        XCTAssertEqual(events.count, 3, "The file is flushed once and the folder once: \(events)")
         XCTAssertTrue(
-            (flushedFiles.first ?? "").hasSuffix(".tmp"),
-            "The file that is flushed is the temporary file: \(flushedFiles)"
+            (events.first ?? "").hasSuffix(".tmp"),
+            "The file that is flushed is the temporary file: \(events)"
         )
+        XCTAssertEqual(events[1], "rename", "The rename must come after the flush of the file: \(events)")
         XCTAssertEqual(
-            flushedFolders,
-            [url.deletingLastPathComponent().lastPathComponent],
-            "The folder must be flushed after the rename"
+            events[2],
+            "folder:\(url.deletingLastPathComponent().lastPathComponent)",
+            "The folder must be flushed after the rename: \(events)"
         )
     }
 

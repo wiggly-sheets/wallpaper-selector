@@ -19,6 +19,8 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
     case backupFailed(path: String, reason: String)
     case verificationFailed(attempts: Int)
     case storeFailure(reason: String)
+    case agentDidNotComeBack
+    case spaceKeptItsWallpaper(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -32,6 +34,10 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
             return "The wallpaper store did not keep the wallpaper after \(attempts) tries."
         case .storeFailure(let reason):
             return reason
+        case .agentDidNotComeBack:
+            return "The wallpaper agent of macOS did not come back, so the wallpaper cannot be checked."
+        case .spaceKeptItsWallpaper(let path):
+            return "The wallpaper store holds a wallpaper that the app cannot write: \(path)."
         }
     }
 }
@@ -104,10 +110,12 @@ class AllSpacesApplier {
     private let backupURL: URL
     private let agent: WallpaperAgent
 
+    /// The store and the agent have to be passed, so a test cannot write the
+    /// store of macOS and kill the wallpaper agent of the user by accident.
     init(
-        storeURL: URL = WallpaperStore.defaultStoreURL,
+        storeURL: URL,
         backupURL: URL = AllSpacesApplier.defaultBackupURL,
-        agent: WallpaperAgent = .live
+        agent: WallpaperAgent
     ) {
         self.store = WallpaperStore()
         self.storeURL = storeURL
@@ -227,31 +235,54 @@ private struct AllSpacesWork: @unchecked Sendable {
             // The agent is looked up before it is killed, so a new agent can
             // be told from the old one.
             let agentsBefore = agent.identifiers()
-            try patch(imageURL)
+            let unwritable = try patch(imageURL)
             agent.restart()
-            if waitForAgent(after: agentsBefore) {
+            switch waitForAgent(after: agentsBefore) {
+            case .cameBack:
                 // The new agent reads the store and writes it again, so the
                 // store is given a moment before it is checked.
                 Thread.sleep(forTimeInterval: agent.settleTime)
+            case .noAgent:
+                break
+            case .timedOut:
+                // The agent is still alive and can write the store from its
+                // own memory, so the wallpaper cannot be checked.
+                throw AllSpacesApplierError.agentDidNotComeBack
             }
-            if store.holdsWallpaper(imageURL, inStoreAt: storeURL) { return }
+            guard store.holdsWallpaper(imageURL, inStoreAt: storeURL) else { continue }
+            if let path = unwritable.first {
+                // A Space keeps its old wallpaper, so the wallpaper did not
+                // reach every Space. The app says so instead of claiming
+                // that it did.
+                throw AllSpacesApplierError.spaceKeptItsWallpaper(path: path)
+            }
+            return
         }
         throw AllSpacesApplierError.verificationFailed(attempts: Self.maximumAttempts)
     }
 
+    /// What the wait for the wallpaper agent saw.
+    private enum AgentWait {
+        /// There was no agent to watch.
+        case noAgent
+        /// A new agent came back.
+        case cameBack
+        /// The agent was running and did not come back in time.
+        case timedOut
+    }
+
     /// Waits until the agent has stopped and a new one runs.
     ///
-    /// Returns `true` when a new agent process was seen. The store is only
-    /// checked after the agent came back: an agent that is still alive can
-    /// write the store from its own memory, and then the check would pass
-    /// while the wallpaper is gone a moment later.
-    private func waitForAgent(after previous: [Int]) -> Bool {
+    /// The store is only checked after the agent came back: an agent that is
+    /// still alive can write the store from its own memory, and then the
+    /// check would pass while the wallpaper is gone a moment later.
+    private func waitForAgent(after previous: [Int]) -> AgentWait {
         guard !previous.isEmpty else {
             // shortcut: without a running agent there is nothing to watch,
             // so the store is checked after a short pause. Upgrade this when
             // the agent can be seen on every Mac.
             Thread.sleep(forTimeInterval: Self.fallbackPause)
-            return false
+            return .noAgent
         }
 
         let deadline = Date().addingTimeInterval(agent.restartTimeout)
@@ -259,16 +290,19 @@ private struct AllSpacesWork: @unchecked Sendable {
             let current = agent.identifiers()
             let oldIsGone = previous.allSatisfy { !current.contains($0) }
             let newAgentRuns = current.contains { !previous.contains($0) }
-            if oldIsGone && newAgentRuns { return true }
-            guard Date() < deadline else { return false }
+            if oldIsGone && newAgentRuns { return .cameBack }
+            guard Date() < deadline else { return .timedOut }
             Thread.sleep(forTimeInterval: Self.pollInterval)
         }
     }
 
     /// Writes the wallpaper into the store.
-    private func patch(_ imageURL: URL) throws {
+    ///
+    /// The result names the containers that hold a wallpaper the app cannot
+    /// write.
+    private func patch(_ imageURL: URL) throws -> [String] {
         do {
-            try store.setWallpaper(imageURL, inStoreAt: storeURL)
+            return try store.setWallpaper(imageURL, inStoreAt: storeURL)
         } catch let error as WallpaperStoreError {
             throw AllSpacesApplierError.storeFailure(reason: error.errorDescription ?? "")
         }

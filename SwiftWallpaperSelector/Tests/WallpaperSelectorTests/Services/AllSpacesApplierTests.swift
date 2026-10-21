@@ -15,7 +15,7 @@ final class AllSpacesApplierTests: XCTestCase {
     }
 
     /// The store as it was measured on the Mac the feature was built on.
-    private func writeStore() throws -> URL {
+    private func writeStore(space: [String: Any]? = nil) throws -> URL {
         let url = directory.appendingPathComponent("Store/Index.plist")
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -25,10 +25,14 @@ final class AllSpacesApplierTests: XCTestCase {
             "Type": "individual",
             "Desktop": try slot(),
         ]
+        var spaces: [String: Any] = [String: Any]()
+        if let space {
+            spaces["space-uuid"] = space
+        }
         let store: [String: Any] = [
             "AllSpacesAndDisplays": container,
             "SystemDefault": container,
-            "Spaces": [String: Any](),
+            "Spaces": spaces,
             "Displays": [String: Any](),
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: store, format: .binary, options: 0)
@@ -290,6 +294,62 @@ final class AllSpacesApplierTests: XCTestCase {
             WallpaperStore().wallpaperURL(in: store)?.standardizedFileURL.path,
             imageURL.standardizedFileURL.path
         )
+    }
+
+    /// A Space whose wallpaper sits in a slot the app does not write keeps
+    /// its old wallpaper. The apply has to say so instead of claiming that
+    /// the wallpaper is on every Space.
+    @MainActor
+    func testASpaceThatKeepsItsWallpaperIsReported() async throws {
+        let storeURL = try writeStore(space: [
+            "Type": "individual",
+            "Video": try slot(),
+        ])
+        let imageURL = try writeWallpaper()
+        let agent = FakeWallpaperAgent(storeURL: storeURL)
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent.wallpaperAgent
+        )
+
+        let failure = await apply(applier, imageURL)
+
+        let message = try XCTUnwrap(failure)
+        XCTAssertTrue(message.contains("every Space"), message)
+        XCTAssertTrue(
+            message.contains("Video"),
+            "The Space that keeps its wallpaper has to be named: \(message)"
+        )
+    }
+
+    /// The agent never comes back: the wait has to give up, or the work of
+    /// the applier spins for ever.
+    @MainActor
+    func testTheApplyGivesUpWhenTheAgentNeverComesBack() async throws {
+        let storeURL = try writeStore()
+        let imageURL = try writeWallpaper()
+        let agent = WallpaperAgent(
+            restart: {},
+            identifiers: { [42] },
+            restartTimeout: 0.3,
+            settleTime: 0.01
+        )
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent
+        )
+
+        let started = Date()
+        let failure = await apply(applier, imageURL)
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(elapsed, 10, "The wait has to give up instead of spinning")
+        let message = try XCTUnwrap(failure)
+        XCTAssertTrue(message.contains("agent"), message)
     }
 
     @MainActor
