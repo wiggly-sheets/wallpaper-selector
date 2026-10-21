@@ -12,7 +12,7 @@ jobs:
       - name: Test
         run: make test
       - name: Build release app
-        run: make bundle CONFIGURATION=release
+        run: make app CONFIGURATION=release
       # The DMG and the checksum are only built on a release tag, so a broken
       # create-dmg flag, a broken hdiutil convert or a wrong checksum name
       # would only be found at release time. This step runs the same recipe

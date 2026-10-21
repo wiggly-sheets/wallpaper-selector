@@ -110,13 +110,16 @@ make run
 Useful commands:
 
 ```bash
-make bundle                       # dist/Wallpaper Selector.app
+make app                          # dist/Wallpaper Selector.app
 make install                      # ~/Applications/Wallpaper Selector.app
 make release-artifacts VERSION=1.0.0
+make release VERSION=1.0.0        # build the artifacts and tag v1.0.0 locally
 ```
 
 `make release-artifacts` creates a versioned DMG and `.sha256` checksum under
-`release/`.
+`release/`. `make release VERSION=x.y.z` builds the same artifacts, creates the
+annotated tag `v<x.y.z>` locally and prints the command that pushes it. It
+never pushes by itself.
 
 ## Privacy
 
