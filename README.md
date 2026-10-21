@@ -339,9 +339,10 @@ make run
 Useful commands:
 
 ```bash
-make bundle                       # dist/Wallpaper Selector.app
+make app                          # dist/Wallpaper Selector.app
 make install                      # ~/Applications/Wallpaper Selector.app
 make release-artifacts VERSION=1.0.0
+make release VERSION=1.0.0        # build the artifacts and tag v1.0.0 locally
 ```
 
 `make release-artifacts` creates a versioned DMG and `.sha256` checksum under
@@ -351,6 +352,10 @@ only moves the compression out of `create-dmg` and into the `hdiutil convert`
 of the Makefile, because `--skip-finalize` leaves a writable disk image
 behind. The layout is driven through AppleScript, so a local `make dmg` needs
 a GUI session; without one it fails with `Failed running AppleScript`.
+
+`make release VERSION=x.y.z` builds the same artifacts, creates the annotated
+tag `v<x.y.z>` locally and prints the command that pushes it. It never pushes
+by itself.
 
 ## Privacy
 
@@ -362,7 +367,8 @@ or usage data.
 ## Releases and Homebrew
 
 Pushing tag `vX.Y.Z` runs release workflow, builds DMG plus SHA-256 checksum,
-and publishes GitHub release. The
+and publishes GitHub release. The release notes are the section of
+[CHANGELOG.md](CHANGELOG.md) for the released version. The
 [wiggly-sheets/homebrew-tap](https://github.com/wiggly-sheets/homebrew-tap)
 repository renders its own cask from its own template and follows the latest
 stable release, so a release needs no manual copy into the tap.
