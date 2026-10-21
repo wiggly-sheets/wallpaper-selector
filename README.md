@@ -116,6 +116,12 @@ wallpaper, and it checks every one of them afterwards. A Space whose wallpaper
 sits in a slot the app does not write keeps its old wallpaper, and the app
 reports that the wallpaper did not reach every Space.
 
+macOS has no public way to ask which wallpaper a Space shows, so the app cannot
+check that the wallpaper reached every Space. It checks that the store still
+holds the wallpaper after the wallpaper agent restarted and came back. When no
+wallpaper agent is running, there is nothing that could read the store the app
+wrote, so the app reports that the wallpaper could not be put on every Space.
+
 A container of the store that is not a dictionary, or that has neither a type
 nor a known wallpaper slot, stops the write: the store is not changed at all,
 the wallpaper stays on the current Space, and the app reports that.
@@ -152,9 +158,10 @@ are enabled and disabled, and the error item.
 
 The rotation controls are disabled while Match System Appearance is on,
 because the rotation is paused in that mode. This covers the Start Rotation
-item and the Rotate submenu in the menu, the interval picker in the preview
-window, the Rotation… button in the main window, and the Rotation pane in
-the Settings window. The theme actions in the Rotate submenu are disabled in
+item, the items of the Rotate submenu in the menu, the interval picker in the
+preview window, the Rotation… button in the main window, and the Rotation
+pane in the Settings window. The Rotate item itself stays enabled, so the
+submenu can be opened. The theme actions in the Rotate submenu are disabled in
 the same state, because a theme action would show one theme and the wallpaper
 of another one.
 
@@ -197,9 +204,10 @@ and the outcome of the pick is reported when it is applied.
   The wallpaper stays on the current Space and the reason is named. The
   reason is named when the wallpaper agent of macOS did not come back, for
   example `The wallpaper agent of macOS did not come back, so the wallpaper
-  cannot be checked.`, and when a Space keeps a wallpaper the app cannot
-  write, for example `The wallpaper store holds a wallpaper that the app
-  cannot write: Spaces.…`.
+  cannot be checked.`, when the wallpaper agent of macOS was not running at
+  all, for example `The wallpaper agent of macOS was not running.`, and when
+  a Space keeps a wallpaper the app cannot write, for example `The wallpaper
+  store holds a wallpaper that the app cannot write: Spaces.…`.
 - A wallpaper that waits for a running rotation, for example
   `A rotation is in progress - the wallpaper will be applied when it
   finishes.` The pick is applied when the rotation is done.
@@ -222,8 +230,10 @@ window.
 
 The preview window opens below the menu-bar icon. It takes the height of its
 content, so a longer list of wallpapers makes it taller, and it never grows
-past the visible frame of the display. A body that does not fit scrolls, so
-every control stays reachable.
+past the visible frame of the display. The grid of wallpapers scrolls in its
+own area once it is taller than 280 points, so a long list of wallpapers does
+not make the window taller. A body that does not fit scrolls, so every
+control stays reachable.
 
 ### Main window
 
@@ -317,6 +327,7 @@ Requirements:
 - Xcode 15 or newer
 - `create-dmg`, needed by `make dmg` and `make release-artifacts`:
   `brew install create-dmg`
+- a GUI session, needed by `make dmg` for the layout of the Finder window
 
 ```bash
 git clone https://github.com/wiggly-sheets/wallpaper-selector.git
@@ -334,8 +345,12 @@ make release-artifacts VERSION=1.0.0
 ```
 
 `make release-artifacts` creates a versioned DMG and `.sha256` checksum under
-`release/`. A local `make dmg` skips the Finder window layout, while the DMG
-published by the release workflow is finalized and keeps it.
+`release/`. A local `make dmg` and the DMG of the release workflow end up the
+same: a read-only disk image with the Finder window layout. The local recipe
+only moves the compression out of `create-dmg` and into the `hdiutil convert`
+of the Makefile, because `--skip-finalize` leaves a writable disk image
+behind. The layout is driven through AppleScript, so a local `make dmg` needs
+a GUI session; without one it fails with `Failed running AppleScript`.
 
 ## Privacy
 

@@ -23,12 +23,16 @@ The findings of the audit itself were fixed in the first round. The image
 discovery skips a folder that is named like an image and lists every file
 once. The thumbnail cache stays small and is dropped when the picker closes.
 The All Spaces automation reports the manual fallback when System Settings
-stays away. A wallpaper that reached only some of the displays is reported.
-The rotation is scoped to the theme of the current appearance. The
-configuration is kept when the settings file or the state is broken. The
-preview popover opens below the status item icon. The failures are shown and
-the controls that cannot work are greyed out. The CI builds the release
-artifacts on every push and runs the tests before a release.
+stays away. **Superseded.** There is no manual fallback any more:
+[ADR 0002](../../docs/adr/0002-wallpaper-store-instead-of-accessibility.md)
+replaced the Accessibility approach with the wallpaper store of macOS, so the
+app puts the wallpaper on every Space by writing that store. A wallpaper that
+reached only some of the displays is reported. The rotation is scoped to the
+theme of the current appearance. The configuration is kept when the settings
+file or the state is broken. The preview popover opens below the status item
+icon. The failures are shown and the controls that cannot work are greyed out.
+The CI builds the release artifacts on every push and runs the tests before a
+release.
 
 The review round that followed the audit closed three more findings. The
 watcher of the settings file reads the file once more when the modification
