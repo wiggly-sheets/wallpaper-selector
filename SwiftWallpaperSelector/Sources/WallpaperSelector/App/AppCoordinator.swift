@@ -15,22 +15,31 @@ final class AppCoordinator: ObservableObject {
     let settingsViewModel: SettingsViewModel
 
     private let allSpacesApplier: AllSpacesApplier
+    private let desktopImageURL: @MainActor () -> URL?
     private var cancellables = Set<AnyCancellable>()
     private var previousSettings: WallpaperSettings
     private var menuBarHostingController: MenuBarHostingViewController?
 
     convenience init() {
-        self.init(settingsManager: SettingsManager(), injectedHotKeyManager: nil, startsMenuBar: true)
+        self.init(
+            settingsManager: SettingsManager(),
+            injectedHotKeyManager: nil,
+            injectedWallpaperProvider: nil,
+            allSpacesApplier: AllSpacesApplier(),
+            injectedDesktopImageURL: AppCoordinator.currentDesktopImageURL,
+            startsMenuBar: true
+        )
     }
 
     init(
         settingsManager: SettingsManager,
         injectedHotKeyManager: HotKeyManager?,
         injectedWallpaperProvider: WallpaperSetting? = nil,
-        injectedAllSpacesApplier: AllSpacesApplier? = nil,
+        allSpacesApplier: AllSpacesApplier,
+        injectedDesktopImageURL: @escaping @MainActor () -> URL? = AppCoordinator.currentDesktopImageURL,
         startsMenuBar: Bool
     ) {
-        let applier = injectedAllSpacesApplier ?? AllSpacesApplier()
+        let applier = allSpacesApplier
         let wallpaperProvider = injectedWallpaperProvider ?? WallpaperProvider(
             applyToAllSpaces: { url in
                 // The user can turn the setting off at any moment, so it is
@@ -70,7 +79,8 @@ final class AppCoordinator: ObservableObject {
             appState: appState,
             launchAtLoginManager: launchAtLoginManager
         )
-        allSpacesApplier = applier
+        self.allSpacesApplier = applier
+        self.desktopImageURL = injectedDesktopImageURL
         previousSettings = settingsManager.settings
 
         appState.settingsPublisher
@@ -94,8 +104,9 @@ final class AppCoordinator: ObservableObject {
         // A wallpaper that could not be put on every Space is reported
         // through the same channel, so the menu bar and the settings show it
         // too.
-        allSpacesApplier.onError = { [weak self] message in
-            self?.rotationService.reportWallpaperError(message)
+        allSpacesApplier.onResult = { [weak self] result in
+            guard case .failure(let failure) = result else { return }
+            self?.rotationService.reportWallpaperError(failure.errorDescription ?? "")
         }
 
         if startsMenuBar {
@@ -166,14 +177,32 @@ final class AppCoordinator: ObservableObject {
 
     /// Puts the wallpaper that is on the screen on every Space.
     ///
+    /// The wallpaper on the screen is the one the user sees, also when it
+    /// was changed in the System Settings and not through the app. The
+    /// wallpaper of the settings is the fallback, for a screen that reports
+    /// no wallpaper at all.
+    ///
     /// The wallpaper is put on every Space right away, so the user does not
     /// have to wait for the next rotation. A wallpaper that is gone is left
     /// alone: the next rotation picks a new one.
     private func applyCurrentWallpaperToAllSpaces() {
-        guard let path = settingsManager.settings.currentWallpaper else { return }
-        let url = URL(fileURLWithPath: path)
+        guard let url = wallpaperOnScreen() else { return }
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         allSpacesApplier.apply(url)
+    }
+
+    /// The wallpaper that is on the screen.
+    private func wallpaperOnScreen() -> URL? {
+        if let onScreen = desktopImageURL() { return onScreen }
+        guard let path = settingsManager.settings.currentWallpaper else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// The wallpaper of the main screen.
+    @MainActor
+    static func currentDesktopImageURL() -> URL? {
+        guard let screen = NSScreen.main else { return nil }
+        return NSWorkspace.shared.desktopImageURL(for: screen)
     }
 
     private func startMenuBar() {

@@ -104,6 +104,10 @@ store and restarts the agent. The restart clears the wallpaper the agent kept
 for a single Space, so the wallpaper of the app reaches every Space. The
 desktop flickers briefly while the agent restarts.
 
+When you turn All Spaces on, the wallpaper that is on the screen is the one
+that reaches every Space. The app writes the wallpaper of the app only, when
+the wallpaper was changed in the System Settings and not through the app.
+
 The app takes a one-time backup of the store before it writes it for the first
 time. The backup lives in
 `~/Library/Application Support/WallpaperSelector/WallpaperIndex.plist.backup`

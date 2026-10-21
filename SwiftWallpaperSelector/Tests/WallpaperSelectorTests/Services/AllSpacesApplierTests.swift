@@ -89,35 +89,36 @@ final class AllSpacesApplierTests: XCTestCase {
         line: UInt = #line
     ) async -> String? {
         let finished = expectation(description: "the apply finished")
-        var failure: String?
-        applier.onError = { message in
-            failure = message
+        var message: String?
+        applier.onResult = { result in
+            if case .failure(let failure) = result {
+                message = failure.errorDescription
+            }
             finished.fulfill()
         }
-        applier.onApplied = { finished.fulfill() }
 
         applier.apply(imageURL)
 
         await fulfillment(of: [finished], timeout: 10)
-        return failure
+        return message
     }
 
     @MainActor
     func testTheWallpaperIsPutOnEverySpace() async throws {
         let storeURL = try writeStore()
         let imageURL = try writeWallpaper()
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: storeURL)
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
-            restartAgent: { restartCount += 1 }
+            agent: agent.wallpaperAgent
         )
 
         let failure = await apply(applier, imageURL)
 
         XCTAssertNil(failure)
-        XCTAssertEqual(restartCount, 1)
+        XCTAssertEqual(agent.restartCount, 1)
         let store = try WallpaperStore().read(at: storeURL)
         XCTAssertEqual(
             WallpaperStore().wallpaperURL(in: store)?.standardizedFileURL.path,
@@ -131,35 +132,35 @@ final class AllSpacesApplierTests: XCTestCase {
         let original = try Data(contentsOf: storeURL)
         let first = try writeWallpaper(named: "First.jpg")
         let second = try writeWallpaper(named: "Second.jpg")
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: storeURL)
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
-            restartAgent: { restartCount += 1 }
+            agent: agent.wallpaperAgent
         )
         _ = await apply(applier, first)
         XCTAssertEqual(try Data(contentsOf: backupURL), original)
 
         _ = await apply(applier, second)
-        XCTAssertEqual(restartCount, 2)
+        XCTAssertEqual(agent.restartCount, 2)
         XCTAssertEqual(try Data(contentsOf: backupURL), original)
     }
 
     @MainActor
     func testAMissingStoreIsReportedAsAMacThatNeedsANewerMacOS() async throws {
         let imageURL = try writeWallpaper()
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: directory)
 
         let applier = AllSpacesApplier(
             storeURL: directory.appendingPathComponent("Store/Index.plist"),
             backupURL: backupURL,
-            restartAgent: { restartCount += 1 }
+            agent: agent.wallpaperAgent
         )
 
         let failure = await apply(applier, imageURL)
 
-        XCTAssertEqual(restartCount, 0)
+        XCTAssertEqual(agent.restartCount, 0)
         let message = try XCTUnwrap(failure)
         XCTAssertTrue(message.contains(imageURL.lastPathComponent), message)
         XCTAssertTrue(message.contains("every Space"), message)
@@ -170,17 +171,17 @@ final class AllSpacesApplierTests: XCTestCase {
     func testAMissingWallpaperIsReported() async throws {
         let storeURL = try writeStore()
         let before = try Data(contentsOf: storeURL)
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: storeURL)
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
-            restartAgent: { restartCount += 1 }
+            agent: agent.wallpaperAgent
         )
 
         let failure = await apply(applier, directory.appendingPathComponent("Missing.jpg"))
 
-        XCTAssertEqual(restartCount, 0)
+        XCTAssertEqual(agent.restartCount, 0)
         XCTAssertNotNil(failure)
         XCTAssertEqual(try Data(contentsOf: storeURL), before)
     }
@@ -190,23 +191,17 @@ final class AllSpacesApplierTests: XCTestCase {
         let storeURL = try writeStore()
         let original = try Data(contentsOf: storeURL)
         let imageURL = try writeWallpaper()
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: storeURL, staleContent: original)
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
-            restartAgent: {
-                restartCount += 1
-                if restartCount == 1 {
-                    // The agent writes the store from its own memory.
-                    try? original.write(to: storeURL)
-                }
-            }
+            agent: agent.wallpaperAgent
         )
 
         let failure = await apply(applier, imageURL)
 
-        XCTAssertEqual(restartCount, 2)
+        XCTAssertEqual(agent.restartCount, 2)
         XCTAssertNil(failure)
         let store = try WallpaperStore().read(at: storeURL)
         XCTAssertEqual(
@@ -220,23 +215,81 @@ final class AllSpacesApplierTests: XCTestCase {
         let storeURL = try writeStore()
         let original = try Data(contentsOf: storeURL)
         let imageURL = try writeWallpaper()
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: storeURL, staleContent: original, everyRestart: true)
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
-            restartAgent: {
-                restartCount += 1
-                try? original.write(to: storeURL)
-            }
+            agent: agent.wallpaperAgent
         )
 
         let failure = await apply(applier, imageURL)
 
-        XCTAssertEqual(restartCount, 3)
+        XCTAssertEqual(agent.restartCount, 3)
         let message = try XCTUnwrap(failure)
         XCTAssertTrue(message.contains(imageURL.lastPathComponent), message)
         XCTAssertTrue(message.contains("every Space"), message)
+    }
+
+    /// The agent of macOS writes the store from its own memory a moment
+    /// after it was killed. The apply must not report success before the
+    /// new agent came back, because the wallpaper would be gone a moment
+    /// later.
+    @MainActor
+    func testTheApplyWaitsForTheAgentToComeBack() async throws {
+        let storeURL = try writeStore()
+        let original = try Data(contentsOf: storeURL)
+        let imageURL = try writeWallpaper()
+        let wroteStore = expectation(description: "the agent wrote the store")
+        let agent = FakeWallpaperAgent(storeURL: storeURL, staleContent: original) {
+            wroteStore.fulfill()
+        }
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent.wallpaperAgent
+        )
+
+        let failure = await apply(applier, imageURL)
+        await fulfillment(of: [wroteStore], timeout: 5)
+
+        XCTAssertNil(failure)
+        let store = try WallpaperStore().read(at: storeURL)
+        XCTAssertEqual(
+            WallpaperStore().wallpaperURL(in: store)?.standardizedFileURL.path,
+            imageURL.standardizedFileURL.path,
+            "The store must hold the wallpaper after the agent came back"
+        )
+    }
+
+    /// Without a running agent there is nothing to watch. The store is
+    /// checked anyway.
+    @MainActor
+    func testTheApplyWorksWithoutARunningAgent() async throws {
+        let storeURL = try writeStore()
+        let imageURL = try writeWallpaper()
+        let agent = WallpaperAgent(
+            restart: {},
+            identifiers: { [] },
+            restartTimeout: 1,
+            settleTime: 0.01
+        )
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent
+        )
+
+        let failure = await apply(applier, imageURL)
+
+        XCTAssertNil(failure)
+        let store = try WallpaperStore().read(at: storeURL)
+        XCTAssertEqual(
+            WallpaperStore().wallpaperURL(in: store)?.standardizedFileURL.path,
+            imageURL.standardizedFileURL.path
+        )
     }
 
     @MainActor
@@ -244,7 +297,7 @@ final class AllSpacesApplierTests: XCTestCase {
         let storeURL = try writeStore()
         let before = try Data(contentsOf: storeURL)
         let imageURL = try writeWallpaper()
-        var restartCount = 0
+        let agent = FakeWallpaperAgent(storeURL: storeURL)
 
         // A file stands where the folder of the backup should be.
         let blocked = directory.appendingPathComponent("Blocked")
@@ -253,12 +306,12 @@ final class AllSpacesApplierTests: XCTestCase {
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: blocked.appendingPathComponent("WallpaperIndex.plist.backup"),
-            restartAgent: { restartCount += 1 }
+            agent: agent.wallpaperAgent
         )
 
         let failure = await apply(applier, imageURL)
 
-        XCTAssertEqual(restartCount, 0)
+        XCTAssertEqual(agent.restartCount, 0)
         XCTAssertNotNil(failure)
         XCTAssertEqual(try Data(contentsOf: storeURL), before)
     }
@@ -269,5 +322,86 @@ final class AllSpacesApplierTests: XCTestCase {
             AllSpacesApplier.defaultBackupURL.path,
             NSHomeDirectory() + "/Library/Application Support/WallpaperSelector/WallpaperIndex.plist.backup"
         )
+    }
+}
+
+/// The wallpaper agent of the tests.
+///
+/// The agent is not a real process. It has an identifier that changes when
+/// it is restarted, so the applier sees that a new agent runs. The agent
+/// can write the store from its own memory a moment after the restart, like
+/// the agent of macOS does.
+final class FakeWallpaperAgent: @unchecked Sendable {
+    private let lock = NSLock()
+    private var identifier = 1
+    private var running = true
+    private var wroteStore = false
+
+    /// The number of times the agent was restarted.
+    private(set) var restartCount = 0
+
+    /// The store the agent writes when it comes back.
+    private let storeURL: URL
+    /// The content the agent writes when it comes back.
+    private let staleContent: Data?
+    /// Whether the agent writes the store on every restart or only on the
+    /// first one.
+    private let everyRestart: Bool
+    /// Called when the agent wrote the store.
+    private let onWrite: () -> Void
+
+    init(
+        storeURL: URL,
+        staleContent: Data? = nil,
+        everyRestart: Bool = false,
+        onWrite: @escaping () -> Void = {}
+    ) {
+        self.storeURL = storeURL
+        self.staleContent = staleContent
+        self.everyRestart = everyRestart
+        self.onWrite = onWrite
+    }
+
+    /// The agent as the applier uses it.
+    var wallpaperAgent: WallpaperAgent {
+        WallpaperAgent(
+            restart: { [self] in restart() },
+            identifiers: { [self] in currentIdentifiers() },
+            restartTimeout: 2,
+            settleTime: 0.02
+        )
+    }
+
+    /// The identifiers of the agent processes that run.
+    func currentIdentifiers() -> [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        return running ? [identifier] : []
+    }
+
+    /// The agent is killed and comes back a moment later.
+    func restart() {
+        lock.lock()
+        running = false
+        restartCount += 1
+        let next = identifier + 1
+        lock.unlock()
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.03) { [self] in
+            lock.lock()
+            let writes = staleContent != nil && (everyRestart || !wroteStore)
+            if writes { wroteStore = true }
+            lock.unlock()
+
+            if writes {
+                try? staleContent?.write(to: storeURL)
+                onWrite()
+            }
+
+            lock.lock()
+            identifier = next
+            running = true
+            lock.unlock()
+        }
     }
 }

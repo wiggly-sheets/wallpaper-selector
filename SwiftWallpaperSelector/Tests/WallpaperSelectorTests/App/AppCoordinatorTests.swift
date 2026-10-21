@@ -11,10 +11,10 @@ final class AppCoordinatorTests: XCTestCase {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
         let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier(),
+            hotKeyManager: hotKeyManager
         )
         defer { _ = coordinator }
 
@@ -29,10 +29,10 @@ final class AppCoordinatorTests: XCTestCase {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
         let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier(),
+            hotKeyManager: hotKeyManager
         )
         defer { _ = coordinator }
         let registrationsBefore = hotKeyManager.registrationCount
@@ -47,11 +47,9 @@ final class AppCoordinatorTests: XCTestCase {
     func testAnAppearanceErrorReachesTheAppState() throws {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
-        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier()
         )
         defer { _ = coordinator }
 
@@ -68,11 +66,9 @@ final class AppCoordinatorTests: XCTestCase {
     func testAFailedSettingsWriteReachesTheMenuBar() async throws {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
-        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier()
         )
         defer { _ = coordinator }
 
@@ -103,11 +99,9 @@ final class AppCoordinatorTests: XCTestCase {
     func testTheQuitFlushesThePendingSettingsWrite() throws {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
-        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier()
         )
         defer { _ = coordinator }
 
@@ -129,7 +123,6 @@ final class AppCoordinatorTests: XCTestCase {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
         let wallpaperProvider = MockWallpaperProvider()
-        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
         let directory = try makeWallpaperDirectory(in: context)
         let pin = try makeImage(named: "pin.jpg", in: directory)
         let pick = try makeImage(named: "pick.jpg", in: directory)
@@ -141,11 +134,10 @@ final class AppCoordinatorTests: XCTestCase {
             allFoldersLightWallpaper: pin.path,
             allFoldersDarkWallpaper: pin.path
         ))
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            injectedWallpaperProvider: wallpaperProvider,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier(),
+            wallpaperProvider: wallpaperProvider
         )
         defer { _ = coordinator }
 
@@ -172,7 +164,6 @@ final class AppCoordinatorTests: XCTestCase {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
         let wallpaperProvider = MockWallpaperProvider()
-        let hotKeyManager = RecordingHotKeyManager(settingsManager: settingsManager)
         let directory = try makeWallpaperDirectory(in: context)
         let pin = try makeImage(named: "pin.jpg", in: directory)
         let newPin = try makeImage(named: "new-pin.jpg", in: directory)
@@ -182,11 +173,10 @@ final class AppCoordinatorTests: XCTestCase {
             allFoldersLightWallpaper: pin.path,
             allFoldersDarkWallpaper: pin.path
         ))
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: hotKeyManager,
-            injectedWallpaperProvider: wallpaperProvider,
-            startsMenuBar: false
+            applier: RecordingAllSpacesApplier(),
+            wallpaperProvider: wallpaperProvider
         )
         defer { _ = coordinator }
         wallpaperProvider.reset()
@@ -217,11 +207,65 @@ final class AppCoordinatorTests: XCTestCase {
             folderPaths: [directory.path],
             currentWallpaper: wallpaper.path
         ))
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
-            injectedAllSpacesApplier: applier,
-            startsMenuBar: false
+            applier: applier,
+            desktopImageURL: { wallpaper }
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.allSpaces = true }
+
+        XCTAssertEqual(applier.appliedURLs, [wallpaper])
+    }
+
+    /// The wallpaper of the app is the one it applied last. The user can
+    /// change the wallpaper in the System Settings, and then the wallpaper
+    /// of the app is the old one. The wallpaper on the screen is the one
+    /// that reaches every Space.
+    func testSwitchingAllSpacesOnUsesTheWallpaperOnTheScreen() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let onScreen = try makeImage(named: "on-screen.jpg", in: directory)
+        let stale = try makeImage(named: "stale.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: stale.path
+        ))
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: applier,
+            desktopImageURL: { onScreen }
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.allSpaces = true }
+
+        XCTAssertEqual(
+            applier.appliedURLs,
+            [onScreen],
+            "The wallpaper on the screen is the one the user sees"
+        )
+    }
+
+    /// A screen that reports no wallpaper falls back to the wallpaper of the
+    /// settings.
+    func testSwitchingAllSpacesOnFallsBackToTheWallpaperOfTheSettings() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path
+        ))
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: applier,
+            desktopImageURL: { nil }
         )
         defer { _ = coordinator }
 
@@ -243,11 +287,10 @@ final class AppCoordinatorTests: XCTestCase {
             currentWallpaper: wallpaper.path,
             allSpaces: true
         ))
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
-            injectedAllSpacesApplier: applier,
-            startsMenuBar: false
+            applier: applier,
+            desktopImageURL: { wallpaper }
         )
         defer { _ = coordinator }
 
@@ -263,18 +306,17 @@ final class AppCoordinatorTests: XCTestCase {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
         let applier = RecordingAllSpacesApplier()
-        applier.failureMessage = "The wallpaper could not be put on every Space. The store is missing."
+        applier.failureMessage = "The store is missing."
         let directory = try makeWallpaperDirectory(in: context)
         let wallpaper = try makeImage(named: "current.jpg", in: directory)
         settingsManager.replace(WallpaperSettings(
             folderPaths: [directory.path],
             currentWallpaper: wallpaper.path
         ))
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
-            injectedAllSpacesApplier: applier,
-            startsMenuBar: false
+            applier: applier,
+            desktopImageURL: { wallpaper }
         )
         defer { _ = coordinator }
 
@@ -282,7 +324,7 @@ final class AppCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             coordinator.appState.lastWallpaperError,
-            "The wallpaper could not be put on every Space. The store is missing."
+            "The wallpaper current.jpg could not be put on every Space. The store is missing."
         )
     }
 
@@ -295,11 +337,9 @@ final class AppCoordinatorTests: XCTestCase {
         let applier = RecordingAllSpacesApplier()
         let directory = try makeWallpaperDirectory(in: context)
         let wallpaper = try makeImage(named: "current.jpg", in: directory)
-        let coordinator = AppCoordinator(
+        let coordinator = makeCoordinator(
             settingsManager: settingsManager,
-            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
-            injectedAllSpacesApplier: applier,
-            startsMenuBar: false
+            applier: applier
         )
         defer { _ = coordinator }
         let provider = try XCTUnwrap(coordinator.wallpaperProvider as? WallpaperProvider)
@@ -315,6 +355,62 @@ final class AppCoordinatorTests: XCTestCase {
         provider.applyToAllSpaces?(wallpaper)
 
         XCTAssertEqual(applier.appliedURLs, [wallpaper])
+    }
+
+    /// A test must never write the store of macOS and never kill the
+    /// wallpaper agent of the user.
+    func testTheCoordinatorNeverUsesTheStoreOfMacOS() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path
+        ))
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: applier
+        )
+        defer { _ = coordinator }
+
+        XCTAssertNotEqual(
+            applier.storeURL,
+            WallpaperStore.defaultStoreURL,
+            "The store of macOS must never be written by a test"
+        )
+
+        coordinator.appState.updateSettings { $0.allSpaces = true }
+
+        XCTAssertEqual(
+            applier.appliedURLs,
+            [wallpaper],
+            "The double of the test must do the work"
+        )
+    }
+
+    /// The coordinator of a test.
+    ///
+    /// The applier is always the double: the real one writes the store of
+    /// macOS and restarts the wallpaper agent. The wallpaper on the screen
+    /// is the one the test says, so the test does not depend on the
+    /// wallpaper of the Mac that runs it.
+    private func makeCoordinator(
+        settingsManager: SettingsManager,
+        applier: RecordingAllSpacesApplier,
+        hotKeyManager: HotKeyManager? = nil,
+        wallpaperProvider: WallpaperSetting? = nil,
+        desktopImageURL: @escaping @MainActor () -> URL? = { nil }
+    ) -> AppCoordinator {
+        AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: hotKeyManager ?? RecordingHotKeyManager(settingsManager: settingsManager),
+            injectedWallpaperProvider: wallpaperProvider,
+            allSpacesApplier: applier,
+            injectedDesktopImageURL: desktopImageURL,
+            startsMenuBar: false
+        )
     }
 
     private func makeWallpaperDirectory(in context: TestSettingsContext) throws -> URL {
@@ -337,7 +433,7 @@ final class AppCoordinatorTests: XCTestCase {
 @MainActor
 final class RecordingAllSpacesApplier: AllSpacesApplier {
     private(set) var appliedURLs: [URL] = []
-    /// The failure the applier reports instead of a success.
+    /// The reason the applier reports instead of a success.
     var failureMessage: String?
 
     init() {
@@ -345,12 +441,25 @@ final class RecordingAllSpacesApplier: AllSpacesApplier {
         // the store of macOS is never touched and no agent is ever killed.
         let unused = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("RecordingAllSpacesApplier-\(UUID().uuidString)", isDirectory: true)
-        super.init(storeURL: unused, backupURL: unused, restartAgent: {})
+        super.init(
+            storeURL: unused,
+            backupURL: unused,
+            agent: WallpaperAgent(
+                restart: {},
+                identifiers: { [] },
+                restartTimeout: 1,
+                settleTime: 0.01
+            )
+        )
     }
 
     override func apply(_ imageURL: URL) {
         appliedURLs.append(imageURL)
-        if let failureMessage { onError?(failureMessage) }
+        if let failureMessage {
+            onResult?(.failure(AllSpacesApplyFailure(imagePath: imageURL.path, reason: failureMessage)))
+        } else {
+            onResult?(.success(()))
+        }
     }
 }
 

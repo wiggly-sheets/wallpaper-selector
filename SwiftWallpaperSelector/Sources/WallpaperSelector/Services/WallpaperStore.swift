@@ -62,6 +62,9 @@ struct WallpaperStore {
 
         /// The slots that hold the desktop picture.
         static let desktopPicture = [desktop, defaultSlot, linked]
+
+        /// The keys of a container that this app understands.
+        static let known: Set<String> = Set(desktopPicture + [idle])
     }
 
     /// The provider of a wallpaper that is a single image file.
@@ -79,6 +82,17 @@ struct WallpaperStore {
     }
 
     // MARK: - The file
+
+    /// Flushes the file to the disk.
+    ///
+    /// The file is opened and synchronized, so its content is on the disk
+    /// when it is renamed over the old one.
+    var flushFile: (URL) throws -> Void = WallpaperStore.flushFileToDisk
+
+    /// Flushes the folder of the file to the disk.
+    ///
+    /// The rename is only durable when the folder is flushed, too.
+    var flushFolder: (URL) -> Void = WallpaperStore.flushFolderToDisk
 
     /// Reads the store.
     func read(at url: URL) throws -> [String: Any] {
@@ -112,6 +126,9 @@ struct WallpaperStore {
     /// renamed over the old one, so the agent never reads a half written
     /// file. The rename drops the quarantine flag of the file, which is what
     /// the agent does as well.
+    ///
+    /// The temporary file is flushed before the rename and the folder is
+    /// flushed after it, so a crash cannot leave a store without content.
     func write(_ store: [String: Any], to url: URL) throws {
         let data: Data
         do {
@@ -124,7 +141,9 @@ struct WallpaperStore {
             .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
         do {
             try data.write(to: temporary)
+            try flushFile(temporary)
         } catch {
+            try? FileManager.default.removeItem(at: temporary)
             throw WallpaperStoreError.writeFailed(path: url.path, reason: error.localizedDescription)
         }
 
@@ -133,6 +152,30 @@ struct WallpaperStore {
             try? FileManager.default.removeItem(at: temporary)
             throw WallpaperStoreError.renameFailed(path: url.path, reason: reason)
         }
+
+        flushFolder(url.deletingLastPathComponent())
+    }
+
+    /// Flushes the file to the disk.
+    ///
+    /// The file is opened and synchronized, so its content is on the disk
+    /// when it is renamed over the old one.
+    private static func flushFileToDisk(_ url: URL) throws {
+        let handle = try FileHandle(forUpdating: url)
+        defer { try? handle.close() }
+        handle.synchronizeFile()
+    }
+
+    /// Flushes the folder to the disk.
+    ///
+    /// shortcut: the data is already written, so a folder that cannot be
+    /// flushed is not reported as a failed write. Upgrade this when the
+    /// store has to survive a power cut of the file system.
+    private static func flushFolderToDisk(_ url: URL) {
+        let descriptor = open(url.path, O_RDONLY)
+        guard descriptor >= 0 else { return }
+        _ = fsync(descriptor)
+        close(descriptor)
     }
 
     // MARK: - The wallpaper
@@ -149,6 +192,9 @@ struct WallpaperStore {
     /// The wallpaper is written into the global container, into the
     /// `SystemDefault` and into every Space and Display container that holds
     /// one, because a wallpaper of a single Space wins over the global one.
+    /// A container that holds no wallpaper is skipped, so a Space without a
+    /// wallpaper does not stop the write.
+    ///
     /// The idle slot is left alone: it holds the wallpaper of the idle
     /// screen, which is a different wallpaper.
     ///
@@ -166,20 +212,24 @@ struct WallpaperStore {
             throw WallpaperStoreError.unexpectedShape(reason: "the store has an unknown key \(key)")
         }
 
-        store[Key.globalContainer] = try patched(
+        if let patched = try patched(
             container: store[Key.globalContainer],
             at: Key.globalContainer,
             configuration: configuration,
             optionValues: optionValues,
             now: now
-        )
-        store[Key.systemDefault] = try patched(
+        ) {
+            store[Key.globalContainer] = patched
+        }
+        if let patched = try patched(
             container: store[Key.systemDefault],
             at: Key.systemDefault,
             configuration: configuration,
             optionValues: optionValues,
             now: now
-        )
+        ) {
+            store[Key.systemDefault] = patched
+        }
         store[Key.spaces] = try patched(
             containerMap: store[Key.spaces],
             at: Key.spaces,
@@ -218,13 +268,16 @@ struct WallpaperStore {
 
     /// A container holds the wallpaper in one of its slots and can hold a
     /// container per display.
+    ///
+    /// The result is `nil` when the container holds no wallpaper, so it is
+    /// skipped.
     private func patched(
         container: Any?,
         at path: String,
         configuration: Data,
         optionValues: Data,
         now: Date
-    ) throws -> [String: Any] {
+    ) throws -> [String: Any]? {
         guard let container = container as? [String: Any] else {
             throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a container")
         }
@@ -260,7 +313,15 @@ struct WallpaperStore {
         }
 
         guard holdsWallpaper else {
-            throw WallpaperStoreError.unexpectedShape(reason: "\(path) holds no wallpaper")
+            // A container that carries a type is understood. When it holds
+            // no wallpaper slot, it holds no wallpaper, so it is skipped. A
+            // container with neither a type nor a known key is not
+            // understood, so the write stops.
+            let understood = result["Type"] is String || Slot.known.contains { result[$0] != nil }
+            guard understood else {
+                throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a container that is understood")
+            }
+            return nil
         }
         return result
     }
@@ -279,13 +340,14 @@ struct WallpaperStore {
 
         var result = containerMap
         for (id, value) in containerMap {
-            result[id] = try patched(
+            guard let patched = try patched(
                 container: value,
                 at: "\(path).\(id)",
                 configuration: configuration,
                 optionValues: optionValues,
                 now: now
-            )
+            ) else { continue }
+            result[id] = patched
         }
         return result
     }

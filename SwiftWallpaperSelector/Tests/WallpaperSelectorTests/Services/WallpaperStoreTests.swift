@@ -248,8 +248,9 @@ final class WallpaperStoreTests: XCTestCase {
         )
     }
 
+    /// A container whose keys make no sense stops the write.
     func testAContainerThatIsNotUnderstoodStopsTheWrite() throws {
-        let space: [String: Any] = ["Type": "individual"]
+        let space: [String: Any] = ["Something": "else"]
         let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
         let before = try Data(contentsOf: url)
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
@@ -260,6 +261,79 @@ final class WallpaperStoreTests: XCTestCase {
             }
         }
         XCTAssertEqual(try Data(contentsOf: url), before)
+    }
+
+    /// A container that holds no wallpaper is skipped, so a Space without a
+    /// wallpaper does not stop the write.
+    func testAContainerThatHoldsNoWallpaperIsSkipped() throws {
+        let space: [String: Any] = ["Type": "individual"]
+        let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let store = try WallpaperStore().read(at: url)
+        let spaces = try XCTUnwrap(store["Spaces"] as? [String: Any])
+        let container = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
+        XCTAssertEqual(container["Type"] as? String, "individual")
+        XCTAssertNil(container["Desktop"], "The container without a wallpaper is not written")
+        let global = try XCTUnwrap(store["AllSpacesAndDisplays"] as? [String: Any])
+        let configuration = try configuration(of: global)
+        XCTAssertEqual(
+            (configuration["url"] as? [String: String])?["relative"],
+            imageURL.absoluteString
+        )
+    }
+
+    /// The store must survive a crash: the file is flushed before the
+    /// rename and the folder after it.
+    func testTheStoreIsFlushedBeforeAndAfterTheRename() throws {
+        var flushedFiles: [String] = []
+        var flushedFolders: [String] = []
+        var store = WallpaperStore()
+        store.flushFile = { url in flushedFiles.append(url.lastPathComponent) }
+        store.flushFolder = { url in flushedFolders.append(url.lastPathComponent) }
+        let url = try writeFixture(StoreFixture.store())
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try store.setWallpaper(imageURL, inStoreAt: url)
+
+        XCTAssertEqual(flushedFiles.count, 1, "The file must be flushed before the rename")
+        XCTAssertTrue(
+            (flushedFiles.first ?? "").hasSuffix(".tmp"),
+            "The file that is flushed is the temporary file: \(flushedFiles)"
+        )
+        XCTAssertEqual(
+            flushedFolders,
+            [url.deletingLastPathComponent().lastPathComponent],
+            "The folder must be flushed after the rename"
+        )
+    }
+
+    /// The store is written to a temporary file and renamed over the old
+    /// one, so no temporary file is left behind.
+    func testTheWriteLeavesNoTemporaryFileBehind() throws {
+        let url = try writeFixture(StoreFixture.store())
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let files = try FileManager.default.contentsOfDirectory(
+            atPath: url.deletingLastPathComponent().path
+        )
+        XCTAssertEqual(files, ["Index.plist"])
+    }
+
+    /// A rename that fails must not leave the temporary file behind.
+    func testAFailedRenameLeavesNoTemporaryFileBehind() throws {
+        // A folder stands where the store should be, so the rename fails.
+        let url = directory.appendingPathComponent("Index.plist")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+
+        XCTAssertThrowsError(try WallpaperStore().write(StoreFixture.store(), to: url))
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertEqual(files, ["Index.plist"])
     }
 
     func testAnUnknownKeyOfTheStoreStopsTheWrite() throws {
