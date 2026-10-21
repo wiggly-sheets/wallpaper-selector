@@ -8,14 +8,21 @@ Accepted. The accessibility integration is superseded by
 ## Decision
 
 Wallpaper Selector is a pure Swift macOS application. SwiftUI owns app views;
-AppKit owns menu-bar, window, desktop-image, and accessibility integration.
-Views share observable in-process state. There is no renderer, IPC layer, or
-JavaScript runtime.
+AppKit owns menu-bar, window, and desktop-image integration. Views share
+observable in-process state. There is no renderer, IPC layer, or JavaScript
+runtime.
 
 ## Consequences
 
 - One native process and build path
 - Lower baseline memory use than a Chromium-based implementation
 - Native desktop-image and status-item integration
-- macOS Accessibility permission remains necessary for automating the system
-  “Show on all Spaces” setting
+
+## Superseded
+
+The original decision gave AppKit the accessibility integration and made the
+macOS Accessibility permission necessary for automating the system “Show on all
+Spaces” setting. Both are gone: the app puts the wallpaper on every Space by
+writing the wallpaper store of macOS, so it needs no Accessibility permission
+and opens no System Settings window. See
+[ADR 0002](0002-wallpaper-store-instead-of-accessibility.md).

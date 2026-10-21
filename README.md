@@ -56,7 +56,7 @@ and dark appearance choose different wallpapers.
   being overwritten
 - Every connected display receives wallpaper updates
 - All Spaces: the wallpaper is written into the macOS wallpaper store, so it
-  reaches every Space
+  reaches every Space that holds its wallpaper in a slot the app writes
 
 ## Installation
 
@@ -100,13 +100,10 @@ the `settings.json.corrupt` file described in [Settings file](#settings-file).
 
 macOS keeps the wallpaper of every Space in the store of its wallpaper agent.
 When you turn All Spaces on, Wallpaper Selector writes the wallpaper into that
-store and restarts the agent. The restart clears the wallpaper the agent kept
-for a single Space, so the wallpaper of the app reaches every Space. The
-desktop flickers briefly while the agent restarts.
-
-When you turn All Spaces on, the wallpaper that is on the screen is the one
-that reaches every Space. The app writes the wallpaper of the app only, when
-the wallpaper was changed in the System Settings and not through the app.
+store and restarts the agent. The wallpaper that is on the screen is the one
+that reaches every Space, also when it was changed in the System Settings and
+not through the app. The wallpaper of the app is written only when no screen
+reports one. The desktop flickers briefly while the agent restarts.
 
 The app takes a one-time backup of the store before it writes it for the first
 time. The backup lives in
@@ -114,8 +111,14 @@ time. The backup lives in
 and is never overwritten. If the backup cannot be made, the app does not write
 the store at all.
 
-If the store has a shape the app does not understand, the app never writes it.
-The wallpaper then stays on the current Space, and the app reports that.
+The app writes the wallpaper into every container of the store that holds a
+wallpaper, and it checks every one of them afterwards. A Space whose wallpaper
+sits in a slot the app does not write keeps its old wallpaper, and the app
+reports that the wallpaper did not reach every Space.
+
+A container of the store that is not a dictionary, or that has neither a type
+nor a known wallpaper slot, stops the write: the store is not changed at all,
+the wallpaper stays on the current Space, and the app reports that.
 
 The store exists on macOS 14 and newer, so All Spaces needs macOS 14 or newer.
 On macOS 13 the wallpaper stays on the current Space.
@@ -156,9 +159,11 @@ the same state, because a theme action would show one theme and the wallpaper
 of another one.
 
 While Match System Appearance is on, the pinned wallpaper of the current
-appearance is applied when the system changes appearance, and when the pin,
-the theme or the matching itself changes. It is not applied when the app
-only wakes up: a wallpaper picked by hand stays on the screen.
+appearance is applied when the app starts, when the system changes appearance,
+and when the pin, the theme or the matching itself changes. It is not applied
+when the app only wakes up: a wallpaper picked by hand stays on the screen.
+The start is a moment of its own: with the matching on, the pin replaces a
+wallpaper that was picked by hand at every launch.
 
 The theme buttons in the preview window are enabled whenever a theme exists
 and Match System Appearance is off; the rotation interval does not matter
@@ -189,7 +194,12 @@ and the outcome of the pick is reported when it is applied.
 - A wallpaper that could not be put on every Space, for example
   `The wallpaper Sunset.jpg could not be put on every Space. This feature
   needs macOS 14 or newer, because this Mac has no wallpaper store.`
-  The wallpaper stays on the current Space and the reason is named.
+  The wallpaper stays on the current Space and the reason is named. The
+  reason is named when the wallpaper agent of macOS did not come back, for
+  example `The wallpaper agent of macOS did not come back, so the wallpaper
+  cannot be checked.`, and when a Space keeps a wallpaper the app cannot
+  write, for example `The wallpaper store holds a wallpaper that the app
+  cannot write: Spaces.…`.
 - A wallpaper that waits for a running rotation, for example
   `A rotation is in progress - the wallpaper will be applied when it
   finishes.` The pick is applied when the rotation is done.

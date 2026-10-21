@@ -1,3 +1,10 @@
+> **Superseded.** This is the PRD of the rewrite, kept as the history of the
+> work. The accessibility approach it describes is superseded by
+> [ADR 0002](../../docs/adr/0002-wallpaper-store-instead-of-accessibility.md):
+> the app puts the wallpaper on every Space by writing the wallpaper store of
+> macOS, so it has no manual fallback and needs no Accessibility permission.
+> The rest of the document is unchanged.
+
 ## Problem Statement
 
 The user wants to replace the existing Electron/Node.js (Glaze-based) wallpaper selector with a fully native macOS Swift/SwiftUI application to significantly reduce memory, CPU, and GPU usage, eliminate the Electron/Node overhead, and provide a truly macOS‑native experience while retaining all existing feature set (menu‑bar only, wallpaper folders, themes, timed rotation, appearance‑matching, per‑appearance wallpaper pinning, recent wallpapers, launch‑at‑login, global shortcuts, and the ability to set wallpaper on all spaces).
