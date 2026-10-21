@@ -45,7 +45,8 @@ final class TestSettingsContext {
     func makeSettingsManager(
         at directory: URL? = nil,
         beforeWrite: (@Sendable () -> Void)? = nil,
-        beforeRead: (@Sendable () -> Void)? = nil
+        beforeRead: (@Sendable () -> Void)? = nil,
+        beforePublish: (@MainActor () -> Void)? = nil
     ) -> SettingsManager {
         SettingsManager(
             settingsDirectory: directory ?? settingsDirectory,
@@ -53,7 +54,8 @@ final class TestSettingsContext {
             defaultSettingsDirectory: defaultSettingsDirectory,
             migrateLegacySettings: false,
             beforeWrite: beforeWrite,
-            beforeRead: beforeRead
+            beforeRead: beforeRead,
+            beforePublish: beforePublish
         )
     }
 

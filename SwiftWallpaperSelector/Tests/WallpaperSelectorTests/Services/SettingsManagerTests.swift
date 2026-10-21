@@ -1156,6 +1156,48 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(manager.settings, external)
     }
 
+    /// The reload must not revert a change that lands before the result is
+    /// published.
+    ///
+    /// The decision of the reload is made off the main actor, so a change
+    /// of the app can land in the window between the decision and the
+    /// publish. The settings in memory are the truth and the file follows:
+    /// the change must stay in memory and the queued write must put it on
+    /// the disk.
+    func testTheReloadKeepsTheChangeThatLandsBeforeThePublish() async throws {
+        let context = try TestSettingsContext()
+        let gate = PublishGate()
+        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
+        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
+        try encoded(original).write(to: settingsURL)
+        let manager = context.makeSettingsManager(beforePublish: { gate.beforePublish() })
+        XCTAssertEqual(manager.settings, original)
+
+        // The change lands in the window between the decision of the reload
+        // and the publish of its result.
+        let newer = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/y.jpg")
+        gate.land { manager.replace(newer) }
+
+        // The change lands on the file, outside the app.
+        let external = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/external.jpg")
+        try encoded(external).write(to: settingsURL, options: [.atomic])
+
+        let kept = await waitUntil { manager.settings.currentWallpaper == "/wallpapers/y.jpg" }
+        XCTAssertTrue(kept, "The change must stay in memory")
+        await manager.waitForPendingWrites()
+
+        XCTAssertEqual(
+            manager.settings.currentWallpaper,
+            "/wallpapers/y.jpg",
+            "The change must stay in memory"
+        )
+        XCTAssertEqual(
+            try decodeSettings(at: settingsURL).currentWallpaper,
+            "/wallpapers/y.jpg",
+            "The change must stay on disk"
+        )
+    }
+
     /// An external edit that lands after a failed write has to be adopted.
     ///
     /// The file on the disk is older than the settings in memory, so the
@@ -1377,6 +1419,28 @@ private final class MissingFileCheck: @unchecked Sendable {
     /// Lets the reload continue.
     func resumeTheReload() {
         resume.signal()
+    }
+}
+
+/// Lands a change in the window between the decision of the reload and the
+/// publish of its result.
+///
+/// The gate runs on the main actor, so the change lands the way a change of
+/// the user lands: in the middle of the work of the reload.
+@MainActor
+private final class PublishGate {
+    private var action: (@MainActor () -> Void)?
+
+    /// The seam the settings manager calls before it publishes a result.
+    func beforePublish() {
+        let action = self.action
+        self.action = nil
+        action?()
+    }
+
+    /// The change that lands in the window.
+    func land(_ action: @escaping @MainActor () -> Void) {
+        self.action = action
     }
 }
 

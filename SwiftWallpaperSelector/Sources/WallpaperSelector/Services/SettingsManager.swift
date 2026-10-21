@@ -129,6 +129,12 @@ final class SettingsManager: ObservableObject {
     /// The closure runs off the main actor. It is the seam a test uses to
     /// pause the read, so it can change the settings while the file is read.
     private let beforeRead: (@Sendable () -> Void)?
+    /// Called before the result of an external reload is published.
+    ///
+    /// The closure runs on the main actor. It is the seam a test uses to
+    /// land a change in the window between the decision of the reload and
+    /// the publish of its result.
+    private let beforePublish: (@MainActor () -> Void)?
     private let userDefaults: UserDefaults
     private let configuredDefaultSettingsDirectory: URL
     private let migrateLegacySettings: Bool
@@ -149,7 +155,7 @@ final class SettingsManager: ObservableObject {
 
     private enum ExternalChangeOutcome: Sendable {
         case unchanged
-        case reloaded(WallpaperSettings)
+        case reloaded(WallpaperSettings, snapshot: ExternalChangeSnapshot)
         case recreated
     }
 
@@ -163,7 +169,8 @@ final class SettingsManager: ObservableObject {
         migrateLegacySettings: Bool = true,
         legacySettingsURL: URL? = SettingsManager.defaultLegacySettingsURL,
         beforeWrite: (@Sendable () -> Void)? = nil,
-        beforeRead: (@Sendable () -> Void)? = nil
+        beforeRead: (@Sendable () -> Void)? = nil,
+        beforePublish: (@MainActor () -> Void)? = nil
     ) {
         self.fileManager = fileManager
         self.fileExists = fileExists ?? { url in FileManager.default.fileExists(atPath: url.path) }
@@ -173,6 +180,7 @@ final class SettingsManager: ObservableObject {
         self.legacySettingsURL = legacySettingsURL
         self.beforeWrite = beforeWrite
         self.beforeRead = beforeRead
+        self.beforePublish = beforePublish
         self.currentSettings = SettingsBox(WallpaperSettings())
 
         let storedDirectory = userDefaults
@@ -786,11 +794,18 @@ final class SettingsManager: ObservableObject {
     private func applyExternalChangeOutcome(_ outcome: Result<ExternalChangeOutcome, SettingsManagerError>) {
         switch outcome {
         case .success(.unchanged):
-            // A failed write is still true: the file on disk is older than the
-            // settings in memory, so the message must stay visible.
-            if case .writeFailed? = lastError { break }
-            clearError()
-        case .success(.reloaded(let reloaded)):
+            keepTheSettingsInMemory()
+        case .success(.reloaded(let reloaded, let snapshot)):
+            // The decision was made off the main actor, so a change of the
+            // app can land while the result waits to be published. The
+            // settings in memory are the truth and the file follows, so the
+            // file must not overwrite a change that is newer than the one
+            // the reload saw.
+            beforePublish?()
+            guard isStillCurrent(snapshot) else {
+                keepTheSettingsInMemory()
+                break
+            }
             // The file holds the newest settings, so the app adopts them.
             lastKnownOnDisk.value = reloaded
             publish(reloaded)
@@ -805,6 +820,30 @@ final class SettingsManager: ObservableObject {
         case .failure(let error):
             report(error)
         }
+    }
+
+    /// Keeps the settings in memory and the rules of the error message.
+    ///
+    /// A failed write is still true: the file on the disk is older than the
+    /// settings in memory, so the message must stay visible.
+    private func keepTheSettingsInMemory() {
+        if case .writeFailed? = lastError { return }
+        clearError()
+    }
+
+    /// Whether the settings in memory are still the ones the reload saw.
+    ///
+    /// A change that landed after the decision of the reload is newer than
+    /// the file, so the file must not overwrite it. A write that landed
+    /// since the decision means the file is older than the settings in
+    /// memory, and a write that is still pending means the file is about to
+    /// be older.
+    private func isStillCurrent(_ snapshot: ExternalChangeSnapshot) -> Bool {
+        if currentSettings.value != snapshot.settings { return false }
+        let counters = writeQueueCounters.snapshot
+        if counters.completedWrites != snapshot.writeQueue.completedWrites { return false }
+        if counters.pendingWrites > 0 { return false }
+        return true
     }
 
     private func modificationDate(of url: URL) -> Date? {
@@ -868,7 +907,14 @@ final class SettingsManager: ObservableObject {
                 // The file holds something else, the settings in memory did
                 // not move while it was read and no write of the app is on
                 // its way, so the file was changed outside the app.
-                return .success(.reloaded(reloaded))
+                //
+                // The snapshot travels with the result: the decision is made
+                // off the main actor, so the settings in memory can move on
+                // before the result is published. The publish compares the
+                // settings in memory with the snapshot and drops the result
+                // when they differ.
+                let snapshot = ExternalChangeSnapshot(settings: after, writeQueue: writesAfter)
+                return .success(.reloaded(reloaded, snapshot: snapshot))
             } catch let error as SettingsManagerError {
                 return .failure(error)
             } catch {
@@ -911,6 +957,18 @@ final class SettingsManager: ObservableObject {
         }
         lastError = nil
     }
+}
+
+/// What the reload saw when it made its decision.
+///
+/// The decision is made off the main actor, so the settings in memory can
+/// move on before the result is published. The snapshot is what the publish
+/// compares the settings in memory against.
+private struct ExternalChangeSnapshot: Sendable, Equatable {
+    /// The settings in memory at the end of the read of the file.
+    let settings: WallpaperSettings
+    /// The state of the write queue at the end of the read of the file.
+    let writeQueue: WriteQueueSnapshot
 }
 
 /// The state of the write queue at a moment in time.
