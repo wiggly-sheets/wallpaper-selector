@@ -68,7 +68,7 @@ repository. The tap renders the cask from its own template and follows the
 latest stable release.
 
 ```bash
-brew install --cask wiggly-sheets/tap/wallpaper-selector
+brew install --cask wiggly-sheets/homebrew-tap/wallpaper-selector
 ```
 
 ### Manual install
