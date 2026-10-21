@@ -109,7 +109,7 @@ final class MenuBarMenu: NSObject {
     private let recentSeparator = NSMenuItem.separator()
     private let rotateItem = NSMenuItem(title: "Rotate", action: nil, keyEquivalent: "")
     private let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
-    private let allSpacesItem = NSMenuItem(title: "Apply to All Spaces (opens macOS Settings)", action: nil, keyEquivalent: "")
+    private let allSpacesItem = NSMenuItem(title: "All Spaces", action: nil, keyEquivalent: "")
     private let appearanceItem = NSMenuItem(title: "Match System Appearance", action: nil, keyEquivalent: "")
     private let settingsItem = NSMenuItem(title: "Settings…", action: nil, keyEquivalent: "")
     private let quitItem = NSMenuItem(title: "Quit Wallpaper Selector", action: nil, keyEquivalent: "")

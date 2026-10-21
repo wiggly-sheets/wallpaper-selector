@@ -14,7 +14,7 @@ final class AppCoordinator: ObservableObject {
     let appState: AppState
     let settingsViewModel: SettingsViewModel
 
-    private let allSpacesService: AllSpacesService
+    private let allSpacesApplier: AllSpacesApplier
     private var cancellables = Set<AnyCancellable>()
     private var previousSettings: WallpaperSettings
     private var menuBarHostingController: MenuBarHostingViewController?
@@ -27,9 +27,19 @@ final class AppCoordinator: ObservableObject {
         settingsManager: SettingsManager,
         injectedHotKeyManager: HotKeyManager?,
         injectedWallpaperProvider: WallpaperSetting? = nil,
+        injectedAllSpacesApplier: AllSpacesApplier? = nil,
         startsMenuBar: Bool
     ) {
-        let wallpaperProvider = injectedWallpaperProvider ?? WallpaperProvider()
+        let applier = injectedAllSpacesApplier ?? AllSpacesApplier()
+        let wallpaperProvider = injectedWallpaperProvider ?? WallpaperProvider(
+            applyToAllSpaces: { url in
+                // The user can turn the setting off at any moment, so it is
+                // read when the wallpaper is applied and not when the app
+                // starts.
+                guard settingsManager.settings.allSpaces else { return }
+                applier.apply(url)
+            }
+        )
         let themeProvider = ThemeProvider(settingsManager: settingsManager)
         let rotationService = RotationService(
             settingsManager: settingsManager,
@@ -60,7 +70,7 @@ final class AppCoordinator: ObservableObject {
             appState: appState,
             launchAtLoginManager: launchAtLoginManager
         )
-        allSpacesService = AllSpacesService()
+        allSpacesApplier = applier
         previousSettings = settingsManager.settings
 
         appState.settingsPublisher
@@ -81,19 +91,15 @@ final class AppCoordinator: ObservableObject {
             self?.rotationService.reportWallpaperError(message)
         }
 
+        // A wallpaper that could not be put on every Space is reported
+        // through the same channel, so the menu bar and the settings show it
+        // too.
+        allSpacesApplier.onError = { [weak self] message in
+            self?.rotationService.reportWallpaperError(message)
+        }
+
         if startsMenuBar {
             startMenuBar()
-        }
-        allSpacesService.onResult = { [weak self] result in
-            guard case let .manualActionRequired(enabled, reason) = result else { return }
-            // The alert runs a modal loop: it must not spin inside the
-            // settings publish cascade.
-            DispatchQueue.main.async { [weak self] in
-                self?.menuBarHostingController?.showAllSpacesManualFallback(
-                    enabled: enabled,
-                    reason: reason
-                )
-            }
         }
         hotKeyManager.onHotKeyPressed = { [weak self] identifier in
             self?.menuBarHostingController?.handleHotKey(identifier)
@@ -133,7 +139,13 @@ final class AppCoordinator: ObservableObject {
         }
 
         if previous.allSpaces != current.allSpaces {
-            allSpacesService.setEnabled(current.allSpaces)
+            if current.allSpaces {
+                applyCurrentWallpaperToAllSpaces()
+            }
+            // The app only stops patching when the setting is switched off.
+            // Nothing is restored: the next wallpaper change writes a
+            // per-Space entry through `setDesktopImageURL`, which ends the
+            // global state on its own.
         }
 
         let appearanceContextChanged = previous.matchSystemAppearance != current.matchSystemAppearance
@@ -150,6 +162,18 @@ final class AppCoordinator: ObservableObject {
                 self?.appearanceMonitor.applyAppearanceWallpaperIfNeeded()
             }
         }
+    }
+
+    /// Puts the wallpaper that is on the screen on every Space.
+    ///
+    /// The wallpaper is put on every Space right away, so the user does not
+    /// have to wait for the next rotation. A wallpaper that is gone is left
+    /// alone: the next rotation picks a new one.
+    private func applyCurrentWallpaperToAllSpaces() {
+        guard let path = settingsManager.settings.currentWallpaper else { return }
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        allSpacesApplier.apply(url)
     }
 
     private func startMenuBar() {

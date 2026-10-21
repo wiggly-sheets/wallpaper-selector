@@ -14,7 +14,7 @@ final class AllSpacesApplierTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// The store as it was measured on the Mac the feature was built for.
+    /// The store as it was measured on the Mac the feature was built on.
     private func writeStore() throws -> URL {
         let url = directory.appendingPathComponent("Store/Index.plist")
         try FileManager.default.createDirectory(
@@ -76,26 +76,47 @@ final class AllSpacesApplierTests: XCTestCase {
         directory.appendingPathComponent("Backup/WallpaperIndex.plist.backup")
     }
 
+    /// Puts the wallpaper on every Space and waits for the work.
+    ///
+    /// The work runs off the main actor, so the test waits for the report
+    /// instead of reading the state right away. The report is the failure
+    /// message, or `nil` when the wallpaper reached every Space.
     @MainActor
-    func testTheWallpaperIsPutOnEverySpace() throws {
+    private func apply(
+        _ applier: AllSpacesApplier,
+        _ imageURL: URL,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async -> String? {
+        let finished = expectation(description: "the apply finished")
+        var failure: String?
+        applier.onError = { message in
+            failure = message
+            finished.fulfill()
+        }
+        applier.onApplied = { finished.fulfill() }
+
+        applier.apply(imageURL)
+
+        await fulfillment(of: [finished], timeout: 10)
+        return failure
+    }
+
+    @MainActor
+    func testTheWallpaperIsPutOnEverySpace() async throws {
         let storeURL = try writeStore()
         let imageURL = try writeWallpaper()
         var restartCount = 0
-        var reportedError: String?
-        var reportedSuccess = false
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
             restartAgent: { restartCount += 1 }
         )
-        applier.onError = { reportedError = $0 }
-        applier.onApplied = { reportedSuccess = true }
 
-        applier.apply(imageURL)
+        let failure = await apply(applier, imageURL)
 
-        XCTAssertNil(reportedError)
-        XCTAssertTrue(reportedSuccess)
+        XCTAssertNil(failure)
         XCTAssertEqual(restartCount, 1)
         let store = try WallpaperStore().read(at: storeURL)
         XCTAssertEqual(
@@ -105,7 +126,7 @@ final class AllSpacesApplierTests: XCTestCase {
     }
 
     @MainActor
-    func testTheBackupIsTakenOnceAndIsNeverOverwritten() throws {
+    func testTheBackupIsTakenOnceAndIsNeverOverwritten() async throws {
         let storeURL = try writeStore()
         let original = try Data(contentsOf: storeURL)
         let first = try writeWallpaper(named: "First.jpg")
@@ -117,64 +138,59 @@ final class AllSpacesApplierTests: XCTestCase {
             backupURL: backupURL,
             restartAgent: { restartCount += 1 }
         )
-        applier.apply(first)
+        _ = await apply(applier, first)
         XCTAssertEqual(try Data(contentsOf: backupURL), original)
 
-        applier.apply(second)
+        _ = await apply(applier, second)
         XCTAssertEqual(restartCount, 2)
         XCTAssertEqual(try Data(contentsOf: backupURL), original)
     }
 
     @MainActor
-    func testAMissingStoreIsReportedAsAMacThatNeedsANewerMacOS() throws {
+    func testAMissingStoreIsReportedAsAMacThatNeedsANewerMacOS() async throws {
         let imageURL = try writeWallpaper()
         var restartCount = 0
-        var reportedError: String?
 
         let applier = AllSpacesApplier(
             storeURL: directory.appendingPathComponent("Store/Index.plist"),
             backupURL: backupURL,
             restartAgent: { restartCount += 1 }
         )
-        applier.onError = { reportedError = $0 }
 
-        applier.apply(imageURL)
+        let failure = await apply(applier, imageURL)
 
         XCTAssertEqual(restartCount, 0)
-        let message = try XCTUnwrap(reportedError)
+        let message = try XCTUnwrap(failure)
         XCTAssertTrue(message.contains(imageURL.lastPathComponent), message)
         XCTAssertTrue(message.contains("every Space"), message)
         XCTAssertTrue(message.contains("macOS 14"), message)
     }
 
     @MainActor
-    func testAMissingWallpaperIsReported() throws {
+    func testAMissingWallpaperIsReported() async throws {
         let storeURL = try writeStore()
         let before = try Data(contentsOf: storeURL)
         var restartCount = 0
-        var reportedError: String?
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
             backupURL: backupURL,
             restartAgent: { restartCount += 1 }
         )
-        applier.onError = { reportedError = $0 }
 
-        applier.apply(directory.appendingPathComponent("Missing.jpg"))
+        let failure = await apply(applier, directory.appendingPathComponent("Missing.jpg"))
 
         XCTAssertEqual(restartCount, 0)
-        XCTAssertNotNil(reportedError)
+        XCTAssertNotNil(failure)
         XCTAssertEqual(try Data(contentsOf: storeURL), before)
     }
 
     @MainActor
-    func testTheStoreIsWrittenAgainWhenTheAgentOverwritesIt() throws {
+    func testTheStoreIsWrittenAgainWhenTheAgentOverwritesIt() async throws {
         let storeURL = try writeStore()
         let original = try Data(contentsOf: storeURL)
         let imageURL = try writeWallpaper()
         var restartCount = 0
-        var reportedError: String?
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
@@ -187,12 +203,11 @@ final class AllSpacesApplierTests: XCTestCase {
                 }
             }
         )
-        applier.onError = { reportedError = $0 }
 
-        applier.apply(imageURL)
+        let failure = await apply(applier, imageURL)
 
         XCTAssertEqual(restartCount, 2)
-        XCTAssertNil(reportedError)
+        XCTAssertNil(failure)
         let store = try WallpaperStore().read(at: storeURL)
         XCTAssertEqual(
             WallpaperStore().wallpaperURL(in: store)?.standardizedFileURL.path,
@@ -201,12 +216,11 @@ final class AllSpacesApplierTests: XCTestCase {
     }
 
     @MainActor
-    func testTheApplyFailsWhenTheAgentKeepsOverwritingTheStore() throws {
+    func testTheApplyFailsWhenTheAgentKeepsOverwritingTheStore() async throws {
         let storeURL = try writeStore()
         let original = try Data(contentsOf: storeURL)
         let imageURL = try writeWallpaper()
         var restartCount = 0
-        var reportedError: String?
 
         let applier = AllSpacesApplier(
             storeURL: storeURL,
@@ -216,23 +230,21 @@ final class AllSpacesApplierTests: XCTestCase {
                 try? original.write(to: storeURL)
             }
         )
-        applier.onError = { reportedError = $0 }
 
-        applier.apply(imageURL)
+        let failure = await apply(applier, imageURL)
 
         XCTAssertEqual(restartCount, 3)
-        let message = try XCTUnwrap(reportedError)
+        let message = try XCTUnwrap(failure)
         XCTAssertTrue(message.contains(imageURL.lastPathComponent), message)
         XCTAssertTrue(message.contains("every Space"), message)
     }
 
     @MainActor
-    func testABackupThatCannotBeWrittenStopsTheWrite() throws {
+    func testABackupThatCannotBeWrittenStopsTheWrite() async throws {
         let storeURL = try writeStore()
         let before = try Data(contentsOf: storeURL)
         let imageURL = try writeWallpaper()
         var restartCount = 0
-        var reportedError: String?
 
         // A file stands where the folder of the backup should be.
         let blocked = directory.appendingPathComponent("Blocked")
@@ -243,12 +255,11 @@ final class AllSpacesApplierTests: XCTestCase {
             backupURL: blocked.appendingPathComponent("WallpaperIndex.plist.backup"),
             restartAgent: { restartCount += 1 }
         )
-        applier.onError = { reportedError = $0 }
 
-        applier.apply(imageURL)
+        let failure = await apply(applier, imageURL)
 
         XCTAssertEqual(restartCount, 0)
-        XCTAssertNotNil(reportedError)
+        XCTAssertNotNil(failure)
         XCTAssertEqual(try Data(contentsOf: storeURL), before)
     }
 

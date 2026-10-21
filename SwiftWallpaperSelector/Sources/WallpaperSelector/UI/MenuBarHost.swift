@@ -81,23 +81,6 @@ final class MenuBarHostingViewController: NSViewController {
         }
     }
 
-    func showAllSpacesManualFallback(
-        enabled: Bool,
-        reason: AllSpacesManualFallbackReason
-    ) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Finish All Spaces Setup in System Settings"
-        alert.informativeText = allSpacesFallbackMessage(enabled: enabled, reason: reason)
-        alert.addButton(withTitle: "OK")
-
-        if let window = pickerWindowController?.window, window.isVisible {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
-    }
-
     private func showMainWindow() {
         if pickerWindowController == nil {
             let rootView = PickerWindow()
@@ -174,26 +157,6 @@ final class MenuBarHostingViewController: NSViewController {
         }
         fallbackSettingsWindowController?.showWindow(nil)
         fallbackSettingsWindowController?.window?.makeKeyAndOrderFront(nil)
-    }
-
-    private func allSpacesFallbackMessage(
-        enabled: Bool,
-        reason: AllSpacesManualFallbackReason
-    ) -> String {
-        let desiredAction = enabled ? "turn on" : "turn off"
-        let guidance = "Please \(desiredAction) ‘Show on all Spaces’ in Wallpaper settings."
-        switch reason {
-        case .accessibilityPermissionRequired:
-            return "Wallpaper Selector needs Accessibility permission to change this setting automatically. \(guidance)"
-        case .couldNotOpenWallpaperSettings:
-            return "Wallpaper settings could not be opened. \(guidance)"
-        case .systemSettingsUnavailable:
-            return "System Settings did not finish opening. \(guidance)"
-        case .showOnAllSpacesControlNotFound:
-            return "The ‘Show on all Spaces’ control could not be found safely. \(guidance)"
-        case .automationFailed(let detail):
-            return "The setting could not be changed automatically (\(detail)). \(guidance)"
-        }
     }
 
     @objc private func handleOpenMainWindow() {

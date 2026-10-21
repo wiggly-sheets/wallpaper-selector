@@ -204,6 +204,119 @@ final class AppCoordinatorTests: XCTestCase {
         XCTAssertEqual(wallpaperProvider.appliedURLs, [newPin.standardizedFileURL])
     }
 
+    /// The wallpaper that is on the screen has to reach every Space as soon
+    /// as the user turns the setting on. The user does not wait for the next
+    /// rotation.
+    func testSwitchingAllSpacesOnPutsTheCurrentWallpaperOnEverySpace() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path
+        ))
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
+            injectedAllSpacesApplier: applier,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.allSpaces = true }
+
+        XCTAssertEqual(applier.appliedURLs, [wallpaper])
+    }
+
+    /// The app stops patching when the user turns the setting off. Nothing is
+    /// restored: the next wallpaper change ends the global state on its own.
+    func testSwitchingAllSpacesOffPutsNoWallpaperOnEverySpace() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path,
+            allSpaces: true
+        ))
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
+            injectedAllSpacesApplier: applier,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.allSpaces = false }
+
+        XCTAssertTrue(applier.appliedURLs.isEmpty)
+    }
+
+    /// A wallpaper that could not be put on every Space has to reach the
+    /// channel of the wallpaper errors, so the menu bar and the settings show
+    /// it.
+    func testAFailureOfTheAllSpacesApplyReachesTheWallpaperError() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        applier.failureMessage = "The wallpaper could not be put on every Space. The store is missing."
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path
+        ))
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
+            injectedAllSpacesApplier: applier,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.allSpaces = true }
+
+        XCTAssertEqual(
+            coordinator.appState.lastWallpaperError,
+            "The wallpaper could not be put on every Space. The store is missing."
+        )
+    }
+
+    /// The wallpaper only reaches every Space while the setting is on. The
+    /// setting is read when the wallpaper is applied, because the user can
+    /// turn it off at any moment.
+    func testTheWallpaperReachesEverySpaceOnlyWhileTheSettingIsOn() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        let coordinator = AppCoordinator(
+            settingsManager: settingsManager,
+            injectedHotKeyManager: RecordingHotKeyManager(settingsManager: settingsManager),
+            injectedAllSpacesApplier: applier,
+            startsMenuBar: false
+        )
+        defer { _ = coordinator }
+        let provider = try XCTUnwrap(coordinator.wallpaperProvider as? WallpaperProvider)
+
+        provider.applyToAllSpaces?(wallpaper)
+
+        XCTAssertTrue(
+            applier.appliedURLs.isEmpty,
+            "The wallpaper must stay on the current Space while the setting is off"
+        )
+
+        coordinator.appState.updateSettings { $0.allSpaces = true }
+        provider.applyToAllSpaces?(wallpaper)
+
+        XCTAssertEqual(applier.appliedURLs, [wallpaper])
+    }
+
     private func makeWallpaperDirectory(in context: TestSettingsContext) throws -> URL {
         let directory = context.directory(named: "wallpapers")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -214,6 +327,30 @@ final class AppCoordinatorTests: XCTestCase {
         let url = directory.appendingPathComponent(name)
         try Data("image".utf8).write(to: url)
         return url
+    }
+}
+
+/// Records the wallpapers the coordinator wants on every Space.
+///
+/// The real applier writes the store of macOS and restarts the wallpaper
+/// agent, so a test uses this double instead of it.
+@MainActor
+final class RecordingAllSpacesApplier: AllSpacesApplier {
+    private(set) var appliedURLs: [URL] = []
+    /// The failure the applier reports instead of a success.
+    var failureMessage: String?
+
+    init() {
+        // The store and the backup point at a folder that does not exist, so
+        // the store of macOS is never touched and no agent is ever killed.
+        let unused = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("RecordingAllSpacesApplier-\(UUID().uuidString)", isDirectory: true)
+        super.init(storeURL: unused, backupURL: unused, restartAgent: {})
+    }
+
+    override func apply(_ imageURL: URL) {
+        appliedURLs.append(imageURL)
+        if let failureMessage { onError?(failureMessage) }
     }
 }
 

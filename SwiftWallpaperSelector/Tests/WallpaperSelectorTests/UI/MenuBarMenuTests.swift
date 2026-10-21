@@ -50,7 +50,7 @@ final class MenuBarMenuTests: XCTestCase {
             matchSystemAppearance: true
         ))
 
-        XCTAssertEqual(menu.menu.item(titled: "Apply to All Spaces (opens macOS Settings)")?.state, .on)
+        XCTAssertEqual(menu.menu.item(titled: "All Spaces")?.state, .on)
         XCTAssertEqual(menu.menu.item(titled: "Match System Appearance")?.state, .on)
     }
 

@@ -9,10 +9,22 @@ protocol WallpaperSetting {
 @MainActor
 final class WallpaperProvider: WallpaperSetting {
     typealias ApplyToDisplays = (_ url: URL) -> [Result<Void, Error>]
+    /// Puts the wallpaper on every Space.
+    ///
+    /// The seam runs on the main actor, where the wallpaper is applied.
+    typealias ApplyToAllSpaces = @MainActor (_ url: URL) -> Void
 
     private let applyToDisplays: ApplyToDisplays
+    /// Puts the wallpaper on every Space.
+    ///
+    /// The seam is not private, so a test can ask the provider of the app
+    /// what it would do without changing the wallpaper of the screen.
+    var applyToAllSpaces: ApplyToAllSpaces?
 
-    init(applyToDisplays: ApplyToDisplays? = nil) {
+    init(
+        applyToDisplays: ApplyToDisplays? = nil,
+        applyToAllSpaces: ApplyToAllSpaces? = nil
+    ) {
         self.applyToDisplays = applyToDisplays ?? { url in
             let workspace = NSWorkspace.shared
             return NSScreen.screens.map { screen in
@@ -21,6 +33,7 @@ final class WallpaperProvider: WallpaperSetting {
                 }
             }
         }
+        self.applyToAllSpaces = applyToAllSpaces
     }
 
     func setWallpaper(_ url: URL) throws {
@@ -45,6 +58,11 @@ final class WallpaperProvider: WallpaperSetting {
                 underlying: lastFailure
             )
         }
+
+        // The wallpaper is on every display, so it can go on every Space.
+        // A wallpaper that a display refused is not put on every Space: the
+        // apply failed, and the caller reports the failure.
+        applyToAllSpaces?(url)
     }
 }
 

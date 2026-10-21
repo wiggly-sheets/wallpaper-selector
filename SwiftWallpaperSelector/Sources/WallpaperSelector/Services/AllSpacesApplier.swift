@@ -28,8 +28,13 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
 /// The wallpaper agent keeps the wallpaper of every Space and Display in its
 /// store file. The app writes that file and restarts the agent, so the
 /// wallpaper reaches every Space.
+///
+/// The work runs on a queue of its own: it reads and writes files, restarts
+/// the agent and reads the store again. That takes longer than the main
+/// actor may be blocked, because the interface would freeze while the
+/// desktop flickers.
 @MainActor
-final class AllSpacesApplier {
+class AllSpacesApplier {
 
     /// The backup of the store, taken once before the first write.
     ///
@@ -40,23 +45,24 @@ final class AllSpacesApplier {
     }
 
     /// Reports that the wallpaper could not be put on every Space.
-    var onError: ((String) -> Void)?
+    var onError: (@MainActor (String) -> Void)?
 
     /// Reports that the wallpaper is on every Space.
-    var onApplied: (() -> Void)?
+    var onApplied: (@MainActor () -> Void)?
+
+    /// The queue the work runs on.
+    ///
+    /// The queue is serial, so two applies cannot write the store at the
+    /// same time.
+    private static let workQueue = DispatchQueue(
+        label: "com.wallpaper-selector.all-spaces",
+        qos: .userInitiated
+    )
 
     private let store: WallpaperStore
     private let storeURL: URL
     private let backupURL: URL
     private let restartAgent: () -> Void
-
-    /// The number of times the store is written before the apply is given up.
-    ///
-    /// shortcut: the agent can write the store from its own memory between
-    /// the write and the restart, so the wallpaper is written again. Three
-    /// tries are enough in practice; the apply fails when the agent keeps
-    /// overwriting the store.
-    private static let maximumAttempts = 3
 
     init(
         storeURL: URL = WallpaperStore.defaultStoreURL,
@@ -71,15 +77,75 @@ final class AllSpacesApplier {
 
     /// Puts the wallpaper on every Space.
     ///
-    /// The failure is reported through `onError`, the success through
-    /// `onApplied`.
+    /// The call returns at once, because the work runs on the queue of the
+    /// applier. The failure is reported through `onError`, the success
+    /// through `onApplied`. Both are called on the main actor.
     func apply(_ imageURL: URL) {
-        do {
-            try applyWallpaper(imageURL)
-            onApplied?()
-        } catch {
-            onError?(Self.message(for: error, imageURL: imageURL))
+        let work = AllSpacesWork(
+            store: store,
+            storeURL: storeURL,
+            backupURL: backupURL,
+            restartAgent: restartAgent
+        )
+        Self.workQueue.async { [weak self] in
+            let result = work.run(imageURL)
+            Task { @MainActor in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.onApplied?()
+                case .failure(let error):
+                    self.onError?(Self.message(for: error, imageURL: imageURL))
+                }
+            }
         }
+    }
+
+    /// Restarts the wallpaper agent, so it reads the store that was written.
+    ///
+    /// The caller waits until the agent is gone. The agent is started by
+    /// launchd, so it reads the store on its own.
+    nonisolated static func restartWallpaperAgent() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        process.arguments = ["WallpaperAgent"]
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // The agent is started by launchd, so a missing `killall` only
+            // means that the agent keeps running. The check of the store
+            // reports that.
+        }
+    }
+
+    nonisolated static func message(for error: Error, imageURL: URL) -> String {
+        let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        return "The wallpaper \(imageURL.lastPathComponent) could not be put on every Space. \(reason)"
+    }
+}
+
+/// The work of the applier.
+///
+/// It runs off the main actor, so it carries everything it needs on its own.
+/// The restart closure is not `Sendable`, so the struct is unchecked: the
+/// closure only runs on the queue of the applier.
+private struct AllSpacesWork: @unchecked Sendable {
+    let store: WallpaperStore
+    let storeURL: URL
+    let backupURL: URL
+    let restartAgent: () -> Void
+
+    /// The number of times the store is written before the apply is given up.
+    ///
+    /// shortcut: the agent can write the store from its own memory between
+    /// the write and the restart, so the wallpaper is written again. Three
+    /// tries are enough in practice; the apply fails when the agent keeps
+    /// overwriting the store.
+    private static let maximumAttempts = 3
+
+    func run(_ imageURL: URL) -> Result<Void, Error> {
+        Result { try applyWallpaper(imageURL) }
     }
 
     private func applyWallpaper(_ imageURL: URL) throws {
@@ -124,28 +190,5 @@ final class AllSpacesApplier {
         } catch {
             throw AllSpacesApplierError.backupFailed(path: backupURL.path, reason: error.localizedDescription)
         }
-    }
-
-    /// Restarts the wallpaper agent, so it reads the store that was written.
-    ///
-    /// The caller waits until the agent is gone. The agent is started by
-    /// launchd, so it reads the store on its own.
-    nonisolated static func restartWallpaperAgent() {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        process.arguments = ["WallpaperAgent"]
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            // The agent is started by launchd, so a missing `killall` only
-            // means that the agent keeps running. The check of the store
-            // reports that.
-        }
-    }
-
-    private static func message(for error: Error, imageURL: URL) -> String {
-        let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        return "The wallpaper \(imageURL.lastPathComponent) could not be put on every Space. \(reason)"
     }
 }

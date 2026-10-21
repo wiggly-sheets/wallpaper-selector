@@ -55,7 +55,8 @@ and dark appearance choose different wallpapers.
 - Unreadable settings files are kept as `settings.json.corrupt` instead of
   being overwritten
 - Every connected display receives wallpaper updates
-- Optional All Spaces automation through macOS Wallpaper settings
+- All Spaces: the wallpaper is written into the macOS wallpaper store, so it
+  reaches every Space
 
 ## Installation
 
@@ -95,14 +96,28 @@ open "/Applications/Wallpaper Selector.app"
 This is the macOS quarantine flag on the downloaded app. It is not related to
 the `settings.json.corrupt` file described in [Settings file](#settings-file).
 
-### All Spaces permission
+### All Spaces
 
-macOS has no public API for its **Show on all Spaces** wallpaper preference.
-When you enable All Spaces, Wallpaper Selector opens System Settings and asks
-for Accessibility permission. Grant it in **System Settings → Privacy &
-Security → Accessibility**; the app then updates the macOS preference. If the
-control cannot be changed safely, Wallpaper Selector leaves Wallpaper settings
-open and tells you how to finish the change manually.
+macOS keeps the wallpaper of every Space in the store of its wallpaper agent.
+When you turn All Spaces on, Wallpaper Selector writes the wallpaper into that
+store and restarts the agent. The restart clears the wallpaper the agent kept
+for a single Space, so the wallpaper of the app reaches every Space. The
+desktop flickers briefly while the agent restarts.
+
+The app takes a one-time backup of the store before it writes it for the first
+time. The backup lives in
+`~/Library/Application Support/WallpaperSelector/WallpaperIndex.plist.backup`
+and is never overwritten. If the backup cannot be made, the app does not write
+the store at all.
+
+If the store has a shape the app does not understand, the app never writes it.
+The wallpaper then stays on the current Space, and the app reports that.
+
+The store exists on macOS 14 and newer, so All Spaces needs macOS 14 or newer.
+On macOS 13 the wallpaper stays on the current Space.
+
+The app needs no Accessibility permission, and it opens no System Settings
+window.
 
 ## Usage
 
@@ -119,7 +134,7 @@ The menu bar menu shows the active theme (or All Folders), then:
   shown grayed out)
 - Rotate: interval and action
 - Theme: All Folders and each theme
-- Apply to All Spaces (opens macOS Settings)
+- All Spaces
 - Match System Appearance
 - Settings…
 - Quit Wallpaper Selector
@@ -167,6 +182,10 @@ and the outcome of the pick is reported when it is applied.
   A wallpaper that reaches at least one display is set on that display, and
   the displays that refused it are still reported. A failure while the app
   switches the wallpaper for the system appearance is reported the same way.
+- A wallpaper that could not be put on every Space, for example
+  `The wallpaper Sunset.jpg could not be put on every Space. This feature
+  needs macOS 14 or newer, because this Mac has no wallpaper store.`
+  The wallpaper stays on the current Space and the reason is named.
 - A wallpaper that waits for a running rotation, for example
   `A rotation is in progress - the wallpaper will be applied when it
   finishes.` The pick is applied when the rotation is done.
@@ -216,7 +235,8 @@ in the Appearance pane applies to the running app and is not saved.
 - General: launch at login, the number of recent wallpapers to remember
   (5, 10 or 20), the settings location, and the settings and wallpaper errors
 - Appearance: app theme (Auto, Light, Dark), match system appearance, All
-  Spaces, the theme used in light and dark appearance, and the wallpaper
+  Spaces, which puts the wallpaper on every Space, the theme used in light
+  and dark appearance, and the wallpaper
   pinned for light and dark appearance, used while no theme is set for that
   appearance, chosen from the images of all configured folders. The pin
   picker of an appearance is disabled while a theme is set for that
@@ -279,7 +299,7 @@ not related to the macOS quarantine of downloaded apps: see
 
 Requirements:
 
-- macOS 13 or newer
+- macOS 13 or newer (the All Spaces feature needs macOS 14 or newer)
 - Xcode 15 or newer
 - `create-dmg`, needed by `make dmg` and `make release-artifacts`:
   `brew install create-dmg`

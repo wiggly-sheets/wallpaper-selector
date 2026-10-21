@@ -6,10 +6,10 @@ final class WallpaperProviderTests: XCTestCase {
 
     func testProviderRejectsMissingWallpaperBeforeTouchingDisplays() {
         var didApply = false
-        let provider = WallpaperProvider { _ in
+        let provider = WallpaperProvider(applyToDisplays: { _ in
             didApply = true
             return [.success(())]
-        }
+        })
         let url = URL(fileURLWithPath: "/tmp/nonexistent-wallpaper-\(UUID().uuidString).jpg")
 
         XCTAssertThrowsError(try provider.setWallpaper(url))
@@ -20,10 +20,10 @@ final class WallpaperProviderTests: XCTestCase {
         let url = try makeTemporaryWallpaper()
         defer { try? FileManager.default.removeItem(at: url) }
         var appliedURLs: [URL] = []
-        let provider = WallpaperProvider { url in
+        let provider = WallpaperProvider(applyToDisplays: { url in
             appliedURLs.append(contentsOf: [url, url, url])
             return [.success(()), .success(()), .success(())]
-        }
+        })
 
         try provider.setWallpaper(url)
 
@@ -33,7 +33,7 @@ final class WallpaperProviderTests: XCTestCase {
     func testProviderReportsNoDisplays() throws {
         let url = try makeTemporaryWallpaper()
         defer { try? FileManager.default.removeItem(at: url) }
-        let provider = WallpaperProvider { _ in [] }
+        let provider = WallpaperProvider(applyToDisplays: { _ in [] })
 
         XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
             guard case WallpaperProviderError.noScreens = error else {
@@ -45,9 +45,9 @@ final class WallpaperProviderTests: XCTestCase {
     func testProviderAggregatesPartialDisplayFailures() throws {
         let url = try makeTemporaryWallpaper()
         defer { try? FileManager.default.removeItem(at: url) }
-        let provider = WallpaperProvider { _ in
+        let provider = WallpaperProvider(applyToDisplays: { _ in
             [.success(()), .failure(MockWallpaperProviderError.configuredFailure), .success(())]
-        }
+        })
 
         XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
             guard case let WallpaperProviderError.failedToSetOnDisplays(failed, total, _) = error else {
@@ -63,9 +63,9 @@ final class WallpaperProviderTests: XCTestCase {
     func testTheProviderReportsThatAtLeastOneDisplayWasSet() throws {
         let url = try makeTemporaryWallpaper()
         defer { try? FileManager.default.removeItem(at: url) }
-        let provider = WallpaperProvider { _ in
+        let provider = WallpaperProvider(applyToDisplays: { _ in
             [.success(()), .failure(MockWallpaperProviderError.configuredFailure)]
-        }
+        })
 
         XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
             guard let providerError = error as? WallpaperProviderError else {
@@ -79,9 +79,9 @@ final class WallpaperProviderTests: XCTestCase {
     func testTheProviderReportsThatNoDisplayWasSet() throws {
         let url = try makeTemporaryWallpaper()
         defer { try? FileManager.default.removeItem(at: url) }
-        let provider = WallpaperProvider { _ in
+        let provider = WallpaperProvider(applyToDisplays: { _ in
             [.failure(MockWallpaperProviderError.configuredFailure)]
-        }
+        })
 
         XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
             guard let providerError = error as? WallpaperProviderError else {
@@ -89,6 +89,41 @@ final class WallpaperProviderTests: XCTestCase {
             }
             XCTAssertFalse(providerError.didSetOnAtLeastOneDisplay)
         }
+    }
+
+    /// The wallpaper is put on every Space after it reached the displays,
+    /// never before.
+    func testTheProviderPutsTheWallpaperOnEverySpaceAfterTheApply() throws {
+        let url = try makeTemporaryWallpaper()
+        defer { try? FileManager.default.removeItem(at: url) }
+        var events: [String] = []
+        let provider = WallpaperProvider(
+            applyToDisplays: { _ in
+                events.append("displays")
+                return [.success(())]
+            },
+            applyToAllSpaces: { _ in events.append("allSpaces") }
+        )
+
+        try provider.setWallpaper(url)
+
+        XCTAssertEqual(events, ["displays", "allSpaces"])
+    }
+
+    /// A wallpaper that a display refused is not put on every Space: the
+    /// apply failed and the failure is reported.
+    func testTheProviderDoesNotPutTheWallpaperOnEverySpaceWhenTheApplyFailed() throws {
+        let url = try makeTemporaryWallpaper()
+        defer { try? FileManager.default.removeItem(at: url) }
+        var allSpacesWasCalled = false
+        let provider = WallpaperProvider(
+            applyToDisplays: { _ in [.failure(MockWallpaperProviderError.configuredFailure)] },
+            applyToAllSpaces: { _ in allSpacesWasCalled = true }
+        )
+
+        XCTAssertThrowsError(try provider.setWallpaper(url))
+
+        XCTAssertFalse(allSpacesWasCalled)
     }
 
     private func makeTemporaryWallpaper() throws -> URL {

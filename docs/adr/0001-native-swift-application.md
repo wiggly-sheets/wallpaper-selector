@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Accepted. The accessibility integration is superseded by
+[ADR 0002](0002-wallpaper-store-instead-of-accessibility.md).
 
 ## Decision
 

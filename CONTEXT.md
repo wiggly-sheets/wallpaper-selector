@@ -25,7 +25,7 @@ The folders a wallpaper pin belongs to: the folders of its theme, or every confi
 _Avoid_: collection, set, group
 
 **All Spaces**:
-A macOS setting that makes the desktop picture appear on all spaces/virtual desktops.
+The feature that puts the wallpaper on every Space, so every desktop shows the same picture.
 _Avoid_: everywhere, all desktops, global wallpaper
 
 **Rotation**:
@@ -61,3 +61,9 @@ A wallpaper picked by hand while a rotation is running waits for the rotation to
 
 **The settings in memory are the truth, the file follows.**
 A change is applied in memory at once: the new settings are normalised, stored and published, and the app reacts to them right away. The file is written in the background on a queue of its own, so the user interface never waits for the disk. A write that fails keeps the content the file had and is reported to the user instead of being swallowed. The write that runs last writes the settings that are current when it runs.
+
+**All Spaces puts the wallpaper on every Space.**
+The app writes the wallpaper into the store of the macOS wallpaper agent and restarts the agent. The restart clears the wallpaper the agent kept for a single Space, so the wallpaper of the app wins on every Space. The app does not drive the System Settings of macOS for this: it needs no Accessibility permission and opens no settings window. The desktop flickers briefly while the agent restarts.
+
+**The wallpaper store is never written before it is backed up.**
+The first run copies the store of the macOS wallpaper agent into the Application Support folder of the app. The copy is never overwritten, so it holds the store as it was before the app touched it. The app refuses to write the store when that copy cannot be made, because a store that is written without a backup cannot be put back. A store with a shape the app does not understand is never written either: the wallpaper stays on the current Space and the app says so. macOS 13 has no such store, so the feature needs macOS 14 or newer.

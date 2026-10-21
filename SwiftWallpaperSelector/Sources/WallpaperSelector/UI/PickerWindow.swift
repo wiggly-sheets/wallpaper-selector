@@ -32,7 +32,7 @@ struct PickerWindow: View {
 
                 Toggle(isOn: $settingsViewModel.allSpaces) {
                     Label("All Spaces", systemImage: "rectangle.stack")
-                        .help("Opens macOS Wallpaper settings — turn on 'Show on all Spaces' there")
+                        .help("Puts the wallpaper on every Space")
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)

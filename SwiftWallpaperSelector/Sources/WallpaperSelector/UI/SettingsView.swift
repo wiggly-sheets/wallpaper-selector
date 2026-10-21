@@ -93,6 +93,10 @@ struct SettingsView: View {
                         .accessibilityLabel("All spaces toggle")
                         .onChange(of: viewModel.allSpaces) { viewModel.setAllSpaces($0) }
 
+                    Text("Puts the wallpaper on every Space. Needs macOS 14 or newer.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
                     if !viewModel.themes.isEmpty {
                         Picker("Light Theme", selection: $viewModel.appearanceLightThemeID) {
                             Text("None").tag(Optional<String>.none as String?)

@@ -181,7 +181,7 @@ struct TrayPopoverView: View {
         Toggle(isOn: allSpacesBinding) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("All Spaces")
-                Text("Show the wallpaper on every desktop")
+                Text("Put the wallpaper on every Space")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
