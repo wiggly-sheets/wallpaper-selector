@@ -267,10 +267,11 @@ final class AllSpacesApplierTests: XCTestCase {
         )
     }
 
-    /// Without a running agent there is nothing to watch. The store is
-    /// checked anyway.
+    /// Without a running agent there is nothing that could read the store the
+    /// app wrote, so the apply cannot be proven. The app has to report that
+    /// instead of reporting a success it cannot prove.
     @MainActor
-    func testTheApplyWorksWithoutARunningAgent() async throws {
+    func testTheApplyFailsWhenNoAgentIsRunning() async throws {
         let storeURL = try writeStore()
         let imageURL = try writeWallpaper()
         let agent = WallpaperAgent(
@@ -288,12 +289,12 @@ final class AllSpacesApplierTests: XCTestCase {
 
         let failure = await apply(applier, imageURL)
 
-        XCTAssertNil(failure)
-        let store = try WallpaperStore().read(at: storeURL)
-        XCTAssertEqual(
-            WallpaperStore().wallpaperURL(in: store)?.standardizedFileURL.path,
-            imageURL.standardizedFileURL.path
+        let message = try XCTUnwrap(
+            failure,
+            "The apply must not report a success when no agent could read the store"
         )
+        XCTAssertTrue(message.contains("agent"), message)
+        XCTAssertTrue(message.contains("not running"), message)
     }
 
     /// A Space whose wallpaper sits in a slot the app does not write keeps

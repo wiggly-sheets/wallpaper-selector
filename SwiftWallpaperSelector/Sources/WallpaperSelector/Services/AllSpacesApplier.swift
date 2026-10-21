@@ -20,6 +20,7 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
     case verificationFailed(attempts: Int)
     case storeFailure(reason: String)
     case agentDidNotComeBack
+    case agentWasNotRunning
     case spaceKeptItsWallpaper(path: String)
 
     var errorDescription: String? {
@@ -36,6 +37,8 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
             return reason
         case .agentDidNotComeBack:
             return "The wallpaper agent of macOS did not come back, so the wallpaper cannot be checked."
+        case .agentWasNotRunning:
+            return "The wallpaper agent of macOS was not running."
         case .spaceKeptItsWallpaper(let path):
             return "The wallpaper store holds a wallpaper that the app cannot write: \(path)."
         }
@@ -71,6 +74,12 @@ struct WallpaperAgent: Sendable {
 /// store file. The app writes that file and restarts the agent, so the
 /// wallpaper reaches every Space.
 ///
+/// macOS has no public way to ask which wallpaper a Space shows, so the app
+/// cannot prove that the wallpaper reached every Space. It proves that the
+/// store still holds the wallpaper after the agent restarted and came back,
+/// and it reports a failure when there was no agent that could read the
+/// store.
+///
 /// The work runs on a queue of its own: it reads and writes files, restarts
 /// the agent and reads the store again. That takes longer than the main
 /// actor may be blocked, because the interface would freeze while the
@@ -88,8 +97,9 @@ class AllSpacesApplier {
 
     /// Reports the result of the apply.
     ///
-    /// The result is reported on the main actor: the failure when the
-    /// wallpaper did not reach every Space, the success when it did.
+    /// The result is reported on the main actor: the failure when the apply
+    /// could not be proven, the success when the store still holds the
+    /// wallpaper after the agent came back.
     var onResult: (@MainActor (Result<Void, AllSpacesApplyFailure>) -> Void)?
 
     /// The queue the work runs on.
@@ -208,7 +218,7 @@ private struct AllSpacesWork: @unchecked Sendable {
     /// The seconds between two looks at the processes of the agent.
     private static let pollInterval: TimeInterval = 0.05
 
-    /// The seconds the store is given to settle when no agent can be seen.
+    /// The seconds the apply waits when no agent can be seen.
     private static let fallbackPause: TimeInterval = 0.3
 
     func run(_ imageURL: URL) -> Result<Void, AllSpacesApplyFailure> {
@@ -243,12 +253,22 @@ private struct AllSpacesWork: @unchecked Sendable {
                 // store is given a moment before it is checked.
                 Thread.sleep(forTimeInterval: agent.settleTime)
             case .noAgent:
-                break
+                // There was no agent that could read the store the app
+                // wrote, so the apply cannot be proven. Another try would
+                // not make the agent appear.
+                throw AllSpacesApplierError.agentWasNotRunning
             case .timedOut:
                 // The agent is still alive and can write the store from its
                 // own memory, so the wallpaper cannot be checked.
                 throw AllSpacesApplierError.agentDidNotComeBack
             }
+            // The check reads the file the app wrote, so it proves that the
+            // store still holds the wallpaper after the agent came back.
+            //
+            // shortcut: the `LastSet` of the store cannot tell the write of
+            // the app from the write of the agent, because the patch of the
+            // app writes `LastSet` itself. Upgrade this when macOS can be
+            // asked which wallpaper a Space shows.
             guard store.holdsWallpaper(imageURL, inStoreAt: storeURL) else { continue }
             if let path = unwritable.first {
                 // A Space keeps its old wallpaper, so the wallpaper did not
@@ -279,8 +299,8 @@ private struct AllSpacesWork: @unchecked Sendable {
     private func waitForAgent(after previous: [Int]) -> AgentWait {
         guard !previous.isEmpty else {
             // shortcut: without a running agent there is nothing to watch,
-            // so the store is checked after a short pause. Upgrade this when
-            // the agent can be seen on every Mac.
+            // so the store cannot be checked and the apply is given up.
+            // Upgrade this when the agent can be seen on every Mac.
             Thread.sleep(forTimeInterval: Self.fallbackPause)
             return .noAgent
         }
