@@ -234,4 +234,43 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
 
         XCTAssertEqual(normalized.folderPaths, ["/wallpapers"])
     }
+
+    /// The pins are compared with the standardized path of a folder, so an
+    /// absolute folder has to be stored in the same form. A trailing slash
+    /// or a `.`/`..` component must name the same folder.
+    func testAnAbsoluteFolderIsStoredInItsStandardizedForm() {
+        let plain = WallpaperSettings(folderPaths: ["/wp"]).normalized()
+        let trailingSlash = WallpaperSettings(folderPaths: ["/wp/"]).normalized()
+        let dotComponents = WallpaperSettings(folderPaths: ["/wp/./"]).normalized()
+        let parentComponents = WallpaperSettings(folderPaths: ["/wp/../wp"]).normalized()
+
+        XCTAssertEqual(plain.folderPaths, ["/wp"])
+        XCTAssertEqual(trailingSlash, plain)
+        XCTAssertEqual(dotComponents, plain)
+        XCTAssertEqual(parentComponents, plain)
+    }
+
+    /// A theme scope that is written with a trailing slash has to match the
+    /// configured folder even when the folder list uses the form without it.
+    /// A dropped scope would widen the theme to every configured folder.
+    func testAThemeScopeWithATrailingSlashIsNotWidened() {
+        let theme = Theme(
+            id: "theme",
+            name: "Theme",
+            folderPaths: ["/wp/", "/wp/./"],
+            lightWallpaper: "/wp/light.jpg"
+        )
+        let normalized = WallpaperSettings(
+            folderPaths: ["/wp", "/other"],
+            themes: [theme],
+            activeThemeID: "theme"
+        ).normalized()
+
+        XCTAssertEqual(normalized.themes[0].folderPaths, ["/wp"])
+        XCTAssertFalse(
+            normalized.themes[0].folderPaths.isEmpty,
+            "A dropped scope would widen the theme to every configured folder"
+        )
+        XCTAssertEqual(normalized.themes[0].lightWallpaper, "/wp/light.jpg")
+    }
 }

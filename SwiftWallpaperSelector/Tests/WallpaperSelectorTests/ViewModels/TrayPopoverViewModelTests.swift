@@ -50,10 +50,13 @@ final class TrayPopoverViewModelTests: XCTestCase {
     func testFolderPathsFollowTheEffectiveFolders() throws {
         let folder = settingsContext.directory(named: "wallpapers")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // A path with a trailing `.` component names the same folder but is
+        // not the canonical path, so the view model has to normalize it.
+        appState.updateSettings { $0.folderPaths = [folder.path + "/."] }
 
-        appState.updateSettings { $0.folderPaths = [folder.path] }
-
-        XCTAssertEqual(viewModel.folderPaths, [folder.path])
+        // The `.` component is dropped, so the view model returns the
+        // canonical path instead of the path the settings were given.
+        XCTAssertEqual(viewModel.folderPaths, [folder.standardizedFileURL.path])
     }
 
     /// The popover has to know when the system picks the theme, so it can

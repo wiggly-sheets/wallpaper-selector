@@ -747,9 +747,11 @@ final class SettingsManagerTests: XCTestCase {
         )
     }
 
-    /// A legacy file that holds other settings was not imported: the app
-    /// reports it, so the user can import it by hand.
-    func testTheNextLaunchReportsALegacyFileWithOtherSettingsAsNotImported() throws {
+    /// A legacy file that was imported but could not be moved aside still
+    /// counts as imported after the settings changed. The marker remembers
+    /// the import, so the next launch moves the file aside instead of
+    /// reporting it as not imported.
+    func testTheNextLaunchMovesTheImportedLegacyFileAsideAfterTheSettingsChanged() throws {
         let context = try TestSettingsContext()
         let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
         try FileManager.default.createDirectory(
@@ -773,19 +775,198 @@ final class SettingsManagerTests: XCTestCase {
         firstLaunch.flushPendingWrites()
 
         // The next launch finds the legacy file next to a newer settings file.
+        // The marker says the file was imported, so the file is moved aside.
         let secondLaunch = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
 
-        guard case .legacySettingsNotImported? = secondLaunch.lastError else {
-            return XCTFail("Expected the legacy file to be reported as not imported")
-        }
+        XCTAssertNil(secondLaunch.lastError)
         XCTAssertEqual(
             secondLaunch.settings.folderPaths,
             ["/changed"],
             "The legacy file must not be imported over the newer settings"
         )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: legacyURL.path),
+            "The imported legacy file has to be moved aside"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
+            "The bytes of the legacy file have to survive the rename"
+        )
+    }
+
+    /// A rotation changes the current wallpaper and the history after the
+    /// import, so the content of the legacy file no longer matches the
+    /// settings file. The next launch must still know that the import
+    /// happened and must not report the legacy file as not imported.
+    func testARotationAfterAFailedMoveDoesNotReportTheLegacyFileAsNotImported() throws {
+        let context = try TestSettingsContext()
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try encoded(WallpaperSettings(folderPaths: ["/legacy"])).write(to: legacyURL)
+
+        // The first launch imports the settings, but the rename fails.
+        let firstLaunch = context.makeSettingsManagerMigratingLegacySettings(
+            from: legacyURL,
+            fileManager: NoMoveFileManager()
+        )
+        guard case .legacySettingsNotMoved? = firstLaunch.lastError else {
+            return XCTFail("Expected the legacy file to be reported as not moved aside")
+        }
+
+        // The rotation records the wallpaper that it applied.
+        firstLaunch.update {
+            $0.currentWallpaper = "/legacy/rotated.jpg"
+            $0.recordWallpaperInHistory("/legacy/rotated.jpg")
+        }
+        firstLaunch.flushPendingWrites()
+
+        // The next launch finds the legacy file next to a settings file that
+        // has rotated since the import.
+        let secondLaunch = context.makeSettingsManagerMigratingLegacySettings(
+            from: legacyURL,
+            fileManager: NoMoveFileManager()
+        )
+
+        if case .legacySettingsNotImported? = secondLaunch.lastError {
+            XCTFail("The imported legacy file must not be reported as not imported")
+        }
+        guard case .legacySettingsNotMoved? = secondLaunch.lastError else {
+            return XCTFail("Expected the legacy file to be reported as not moved aside")
+        }
+        XCTAssertEqual(secondLaunch.settings.currentWallpaper, "/legacy/rotated.jpg")
+        XCTAssertEqual(secondLaunch.settings.wallpaperHistory, ["/legacy/rotated.jpg"])
+    }
+
+    /// A legacy file that was rewritten after the import is not the file the
+    /// marker saw: it is compared again and reported, not moved aside.
+    func testARewrittenLegacyFileIsNotTreatedAsImported() throws {
+        let context = try TestSettingsContext()
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try encoded(WallpaperSettings(folderPaths: ["/legacy"])).write(to: legacyURL)
+
+        do {
+            // The first launch imports the settings, but the rename fails, so
+            // the marker remembers the file.
+            let firstLaunch = context.makeSettingsManagerMigratingLegacySettings(
+                from: legacyURL,
+                fileManager: NoMoveFileManager()
+            )
+            guard case .legacySettingsNotMoved? = firstLaunch.lastError else {
+                return XCTFail("Expected the legacy file to be reported as not moved aside")
+            }
+            firstLaunch.replace(WallpaperSettings(folderPaths: ["/changed"]))
+            firstLaunch.flushPendingWrites()
+        }
+
+        // The legacy file is replaced later: other content, another size and
+        // another modification date.
+        try encoded(WallpaperSettings(folderPaths: ["/a/longer/rewritten/legacy/path"]))
+            .write(to: legacyURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(60)],
+            ofItemAtPath: legacyURL.path
+        )
+
+        let secondLaunch = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+
+        guard case .legacySettingsNotImported? = secondLaunch.lastError else {
+            return XCTFail("Expected the rewritten legacy file to be reported as not imported")
+        }
+        XCTAssertEqual(secondLaunch.settings.folderPaths, ["/changed"])
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: legacyURL.path),
-            "The legacy file must not be touched"
+            "A rewritten legacy file must be left in place"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
+            "A rewritten legacy file must not be moved aside"
+        )
+    }
+
+    /// An unreadable settings file cannot tell whether the marker belongs to
+    /// the current import, so the marker is not trusted.
+    func testAnUnreadableSettingsFileDoesNotTrustTheImportMarker() throws {
+        let context = try TestSettingsContext()
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try encoded(WallpaperSettings(folderPaths: ["/legacy"])).write(to: legacyURL)
+
+        do {
+            let firstLaunch = context.makeSettingsManagerMigratingLegacySettings(
+                from: legacyURL,
+                fileManager: NoMoveFileManager()
+            )
+            guard case .legacySettingsNotMoved? = firstLaunch.lastError else {
+                return XCTFail("Expected the legacy file to be reported as not moved aside")
+            }
+            firstLaunch.flushPendingWrites()
+        }
+
+        // The settings file cannot be read on the next launch.
+        try Data("not-json".utf8).write(
+            to: context.defaultSettingsDirectory.appendingPathComponent("settings.json")
+        )
+
+        let secondLaunch = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+        // The unreadable file is reported first and a fresh default file is
+        // written after it. A successful save restores the pending legacy
+        // notice, which is the one the settings window shows.
+        secondLaunch.replace(secondLaunch.settings)
+        secondLaunch.flushPendingWrites()
+
+        guard case .legacySettingsNotImported? = secondLaunch.lastError else {
+            return XCTFail("Expected the legacy file to be reported as not imported")
+        }
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyURL.path),
+            "The legacy file must stay when the settings file is unreadable"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
+            "The legacy file must not be moved aside without readable settings"
+        )
+    }
+
+    /// A readable legacy file next to a readable settings file that holds
+    /// other settings was never imported: it stays in place and is reported.
+    func testAReadableLegacyFileWithOtherSettingsIsNotImported() throws {
+        let context = try TestSettingsContext()
+        let current = WallpaperSettings(folderPaths: ["/current"])
+        // The migrating manager reads the default settings location.
+        let manager = context.makeSettingsManager(at: context.defaultSettingsDirectory)
+        manager.replace(current)
+        manager.flushPendingWrites()
+
+        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
+        try FileManager.default.createDirectory(
+            at: legacyURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try encoded(WallpaperSettings(folderPaths: ["/legacy"])).write(to: legacyURL)
+
+        let launched = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
+
+        guard case .legacySettingsNotImported? = launched.lastError else {
+            return XCTFail("Expected the legacy file to be reported as not imported")
+        }
+        XCTAssertEqual(launched.settings, current)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyURL.path),
+            "The legacy file must stay in place so the user can import it by hand"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
+            "A legacy file that was not imported must not be moved aside"
         )
     }
 

@@ -46,6 +46,18 @@ final class SettingsManager: ObservableObject {
 
     nonisolated static let bundleID = "com.wallpaper-selector.macos"
     nonisolated static let customDirectoryDefaultsKey = "WallpaperSelector.settingsDirectory"
+    /// Marks the legacy settings file that was imported successfully.
+    ///
+    /// The settings in the legacy file change after the import: a rotation
+    /// writes the current wallpaper and the history, so the content of the
+    /// legacy file no longer matches the settings file. The marker tells the
+    /// next launch that the import already happened anyway.
+    ///
+    /// The marker holds the path, modification date and size of the imported
+    /// file. A file that was rewritten after the import no longer matches, so
+    /// it is compared again instead of being moved aside blindly.
+    nonisolated private static let legacySettingsImportedPathDefaultsKey =
+        "WallpaperSelector.legacySettingsImportedPath"
 
     /// The settings file of the Electron version the app replaces.
     nonisolated static let defaultLegacySettingsURL: URL? = {
@@ -304,7 +316,7 @@ final class SettingsManager: ObservableObject {
                     let beforeWrite = self.beforeWrite
                     let fileManager = self.fileManager
                     let onDisk = lastKnownOnDisk
-                    report(writeQueue.sync {
+                    let imported = writeQueue.sync {
                         Self.importLegacySettings(
                             settings,
                             from: legacyURL,
@@ -313,7 +325,20 @@ final class SettingsManager: ObservableObject {
                             beforeWrite: beforeWrite,
                             onDisk: onDisk
                         )
-                    })
+                    }
+                    // The write landed, so the legacy settings were imported.
+                    // When moving the legacy file aside failed, the next launch
+                    // has to know that: a rotation changes the settings in the
+                    // meantime, so the content of the legacy file no longer
+                    // tells that it was imported. A marker of an earlier import
+                    // is dropped once the file is gone.
+                    if imported.wrote,
+                       case .failure(.legacySettingsNotMoved) = imported.result {
+                        setLegacyImportMarker(for: legacyURL)
+                    } else if imported.wrote {
+                        clearLegacyImportMarker()
+                    }
+                    report(imported.result)
                     return
                 case .unreadable:
                     // The legacy file is the only copy of the settings: the
@@ -376,12 +401,31 @@ final class SettingsManager: ObservableObject {
         _ legacyURL: URL,
         loadedSettings: WallpaperSettings?
     ) {
+        // The marker is a fingerprint of the imported file. A marker without
+        // readable settings cannot tell whether the import happened: the
+        // file is left in place and reported.
+        if loadedSettings != nil, legacyImportMarkerMatches(legacyURL) {
+            // The import already happened, also when the legacy file could
+            // not be moved aside. The next launch retries the move; the file
+            // is not reported as not imported.
+            if moveLegacyFileAside(legacyURL) {
+                clearLegacyImportMarker()
+            }
+            return
+        }
+
         if let loadedSettings,
            let legacySettings = try? Self.loadSettings(from: legacyURL),
            legacySettings == loadedSettings {
             // The import already happened. The file is moved aside now, so
-            // the next launch does not see it again.
-            moveLegacyFileAside(legacyURL)
+            // the next launch does not see it again. Older installs have no
+            // marker, so the equal content is the only hint that the import
+            // happened.
+            if moveLegacyFileAside(legacyURL) {
+                clearLegacyImportMarker()
+            } else {
+                setLegacyImportMarker(for: legacyURL)
+            }
             return
         }
         // The legacy file was not imported: it holds other settings or it
@@ -392,15 +436,63 @@ final class SettingsManager: ObservableObject {
         report(notice)
     }
 
+    /// Stores a fingerprint of the legacy file that was imported.
+    ///
+    /// The marker is only written when the file can be inspected. Without a
+    /// marker the next launch falls back to the content comparison.
+    private func setLegacyImportMarker(for legacyURL: URL) {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: legacyURL.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = attributes[.size] as? Int else {
+            clearLegacyImportMarker()
+            return
+        }
+        userDefaults.set(
+            [
+                "path": legacyURL.path,
+                "modificationDate": modificationDate.timeIntervalSince1970,
+                "size": size
+            ],
+            forKey: Self.legacySettingsImportedPathDefaultsKey
+        )
+    }
+
+    private func legacyImportMarker() -> [String: Any]? {
+        userDefaults.dictionary(forKey: Self.legacySettingsImportedPathDefaultsKey)
+    }
+
+    private func clearLegacyImportMarker() {
+        userDefaults.removeObject(forKey: Self.legacySettingsImportedPathDefaultsKey)
+    }
+
+    /// Whether the marker names this file and the file still holds the bytes
+    /// the marker saw.
+    private func legacyImportMarkerMatches(_ legacyURL: URL) -> Bool {
+        guard let marker = legacyImportMarker(),
+              let path = marker["path"] as? String,
+              let modificationDate = marker["modificationDate"] as? Double,
+              let size = marker["size"] as? Int,
+              path == legacyURL.path,
+              let attributes = try? fileManager.attributesOfItem(atPath: legacyURL.path),
+              let currentModificationDate = attributes[.modificationDate] as? Date,
+              let currentSize = attributes[.size] as? Int else {
+            return false
+        }
+        return currentModificationDate.timeIntervalSince1970 == modificationDate
+            && currentSize == size
+    }
+
     /// Moves the legacy file aside, so the next launch does not import it again.
     ///
-    /// The file is renamed, not deleted, so its bytes survive.
-    private func moveLegacyFileAside(_ legacyURL: URL) {
+    /// The file is renamed, not deleted, so its bytes survive. Returns whether
+    /// the file was moved.
+    private func moveLegacyFileAside(_ legacyURL: URL) -> Bool {
         switch Self.renameLegacyFile(legacyURL, fileManager: fileManager) {
         case .success:
-            break
+            return true
         case .failure(let error):
             report(error)
+            return false
         }
     }
 
@@ -440,7 +532,7 @@ final class SettingsManager: ObservableObject {
         fileManager: FileManager,
         beforeWrite: (@Sendable () -> Void)?,
         onDisk: SettingsBox<WallpaperSettings?>
-    ) -> Result<WallpaperSettings, SettingsManagerError> {
+    ) -> (wrote: Bool, result: Result<WallpaperSettings, SettingsManagerError>) {
         let written: WallpaperSettings
         switch performWrite(settings, to: settingsURL, beforeWrite: beforeWrite) {
         case .success(let value):
@@ -448,14 +540,16 @@ final class SettingsManager: ObservableObject {
             // The settings file holds the imported settings now.
             onDisk.value = value
         case .failure(let error):
-            return .failure(error)
+            return (false, .failure(error))
         }
 
         switch renameLegacyFile(legacyURL, fileManager: fileManager) {
         case .success:
-            return .success(written)
+            return (true, .success(written))
         case .failure(let error):
-            return .failure(error)
+            // The import is done when the write lands, only the move aside
+            // failed.
+            return (true, .failure(error))
         }
     }
 
@@ -621,6 +715,11 @@ final class SettingsManager: ObservableObject {
             startFileWatcher()
             clearError()
         case .failure(let error):
+            // The watcher was stopped before the write that recreated the
+            // file. A failed write must not leave the app without a watcher:
+            // every later external edit would be ignored. Starting it is a
+            // no-op when the file still cannot be opened.
+            startFileWatcher()
             report(error)
         }
     }

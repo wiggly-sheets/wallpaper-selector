@@ -208,7 +208,12 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         guard !trimmed.isEmpty else { return nil }
         guard trimmed != ".", trimmed != ".." else { return nil }
         if trimmed.hasPrefix("/") {
-            return trimmed
+            // The pin comparison uses the standardized path, so a folder that
+            // is stored as it was entered would never match its pins. A
+            // trailing slash or a `.`/`..` component must name the same folder.
+            let standardized = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+            guard standardized.hasPrefix("/") else { return nil }
+            return standardized
         }
         if trimmed.hasPrefix("~") {
             let expanded = NSString(string: trimmed).expandingTildeInPath
