@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- On macOS 26 and newer the app uses the native Liquid Glass design. The
+  preview popover is an `NSGlassEffectView` surface, interactive on macOS 27
+  and newer, and the custom toolbar and selection badges use the SwiftUI glass
+  effect. The executable records the macOS 27.2 SDK, so macOS enables Liquid
+  Glass for the standard windows, menus and controls instead of their legacy
+  appearance. macOS 13 through 15 keep the previous material and colors.
+
 ### Changed
 
 - The release notes now come from the section of this CHANGELOG for the released

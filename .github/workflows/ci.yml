@@ -13,6 +13,13 @@ jobs:
         run: make test
       - name: Build release app
         run: make app CONFIGURATION=release
+      # macOS gives an app the current appearance only when its executable
+      # records an SDK of 26.0 or newer. SwiftPM records the deployment target
+      # there by default, so the package names the SDK version to the linker.
+      # This step checks the executable that a real build produces.
+      - name: Check the recorded SDK
+        run: |
+          vtool -show-build "dist/Wallpaper Selector.app/Contents/MacOS/WallpaperSelector" | grep -q "sdk 27.2"
       # The DMG and the checksum are only built on a release tag, so a broken
       # create-dmg flag, a broken hdiutil convert or a wrong checksum name
       # would only be found at release time. This step runs the same recipe

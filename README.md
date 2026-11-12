@@ -42,8 +42,10 @@ and dark appearance choose different wallpapers.
   rotation, themes, recents, appearance matching, and settings
 - Native picker with thumbnail grid, natural filename sorting, current-image
   checkmark, folders, and themes
-- Vibrancy preview window, sized to its content and clamped to the visible
-  frame of the display, anchored below the menu-bar icon
+- Preview window, sized to its content and clamped to the visible frame of the
+  display, anchored below the menu-bar icon. On macOS 26 and newer the preview
+  is a native Liquid Glass surface, and on macOS 27 and newer the glass
+  responds to interaction with the controls it holds
 - Rotation: 30 minutes, hourly, 12 hours, daily; shuffle, sequential, and
   theme rotation modes (the theme modes need at least one theme)
 - Light/dark theme and wallpaper pins, with automatic appearance switching
@@ -324,7 +326,8 @@ not related to the macOS quarantine of downloaded apps: see
 Requirements:
 
 - macOS 13 or newer (the All Spaces feature needs macOS 14 or newer)
-- Xcode 15 or newer
+- Xcode 27.2 or newer: the app builds against the Liquid Glass APIs of the
+  macOS 27.2 SDK
 - `create-dmg`, needed by `make dmg` and `make release-artifacts`:
   `brew install create-dmg`
 - a GUI session, needed by `make dmg` for the layout of the Finder window

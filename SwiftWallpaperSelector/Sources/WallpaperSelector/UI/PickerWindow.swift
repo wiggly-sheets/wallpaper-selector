@@ -91,7 +91,7 @@ struct PickerWindow: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(NSColor.windowBackgroundColor))
+            .glassBarBackground()
             .divider()
 
             ScrollView {
@@ -146,7 +146,7 @@ struct PickerWindow: View {
                                                         Image(systemName: "checkmark.circle.fill")
                                                             .font(.title3)
                                                             .foregroundColor(Color.accentColor)
-                                                            .background(Circle().fill(Color.white))
+                                                            .glassBadgeBackground()
                                                             .padding(4)
                                                     }
                                                     Spacer()

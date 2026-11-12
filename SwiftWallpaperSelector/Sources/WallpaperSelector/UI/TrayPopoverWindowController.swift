@@ -19,6 +19,9 @@ final class TrayPopoverWindowController: NSWindowController {
     /// The width of the popover. The height follows the content.
     static let popoverWidth: CGFloat = 300
 
+    /// The corner radius of the glass surface of the popover.
+    static let popoverCornerRadius: CGFloat = 16
+
     private var statusItem: NSStatusItem?
 
     private var viewModel: TrayPopoverViewModel?
@@ -38,17 +41,15 @@ final class TrayPopoverWindowController: NSWindowController {
         // The hosting view follows the window, so the content is laid out
         // in the size of the window.
         hostingView.autoresizingMask = [.width, .height]
-        let materialView = NSVisualEffectView()
-        materialView.material = .popover
-        materialView.blendingMode = .behindWindow
-        materialView.state = .active
+        let backgroundView = Self.makeBackgroundView(for: hostingView)
         let window = PopoverWindow(
             contentRect: NSRect(x: 0, y: 0, width: Self.popoverWidth, height: 1),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        window.contentView = materialView
+        window.contentView = backgroundView
+        hostingView.frame = backgroundView.bounds
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.level = .floating
@@ -62,8 +63,6 @@ final class TrayPopoverWindowController: NSWindowController {
         self.init(window: window, hostingView: hostingView)
         self.statusItem = statusItem
         self.viewModel = viewModel
-        materialView.addSubview(hostingView)
-        hostingView.frame = materialView.bounds
         viewModel.onShowMainWindow = { [weak self] in
             self?.hide()
             NotificationCenter.default.post(name: .OpenMainWindowRequested, object: nil)
@@ -76,6 +75,33 @@ final class TrayPopoverWindowController: NSWindowController {
             object: window
         )
         observeContentChanges()
+    }
+
+    /// The background of the popover.
+    ///
+    /// macOS 26 draws the popover with the native Liquid Glass view. The
+    /// popover material is the fallback on older systems, where the glass
+    /// view does not exist.
+    private static func makeBackgroundView(for hostingView: NSView) -> NSView {
+        if #available(macOS 26.0, *) {
+            let glassView = NSGlassEffectView()
+            glassView.style = .regular
+            glassView.cornerRadius = popoverCornerRadius
+            glassView.contentView = hostingView
+            if #available(macOS 27.0, *) {
+                // The popover holds controls, so its glass should answer
+                // their interaction with the system effect.
+                glassView.effectIsInteractive = true
+            }
+            return glassView
+        }
+
+        let materialView = NSVisualEffectView()
+        materialView.material = .popover
+        materialView.blendingMode = .behindWindow
+        materialView.state = .active
+        materialView.addSubview(hostingView)
+        return materialView
     }
 
     private init(window: NSWindow, hostingView: NSHostingView<AnyView>) {

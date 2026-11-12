@@ -15,6 +15,51 @@ final class TrayPopoverWindowControllerTests: XCTestCase {
         )
     }
 
+    /// macOS 26 draws the popover with the native Liquid Glass surface. Older
+    /// systems keep the popover material, so the window always has a
+    /// background.
+    func testThePopoverUsesTheNativeGlassSurfaceOnMacOS26AndNewer() throws {
+        let (controller, _) = try makeController()
+
+        if #available(macOS 26.0, *) {
+            let glassView = try XCTUnwrap(
+                controller.window?.contentView as? NSGlassEffectView,
+                "The popover has to use the native glass view on macOS 26 and newer"
+            )
+            XCTAssertEqual(glassView.style, .regular)
+            XCTAssertEqual(
+                glassView.cornerRadius,
+                TrayPopoverWindowController.popoverCornerRadius
+            )
+            XCTAssertNotNil(
+                glassView.contentView,
+                "The SwiftUI content has to sit inside the glass effect"
+            )
+            controller.layout(in: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+            XCTAssertEqual(
+                glassView.frame,
+                controller.window?.contentView?.bounds,
+                "The glass surface has to fill the popover"
+            )
+            XCTAssertEqual(
+                glassView.contentView?.frame,
+                glassView.bounds,
+                "The content has to fill the glass surface"
+            )
+            if #available(macOS 27.0, *) {
+                XCTAssertTrue(
+                    glassView.effectIsInteractive,
+                    "The glass of a popover with controls has to be interactive"
+                )
+            }
+        } else {
+            XCTAssertTrue(
+                controller.window?.contentView is NSVisualEffectView,
+                "The popover has to keep its material before macOS 26"
+            )
+        }
+    }
+
     /// The popover opens below the status item icon. The status item window
     /// covers the whole display, so its middle would open the popover in the
     /// middle of the screen.
