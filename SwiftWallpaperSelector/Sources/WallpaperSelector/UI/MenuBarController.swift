@@ -73,7 +73,10 @@ final class MenuBarController: NSObject {
     private func createStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: nil)
+            button.image = NSImage(
+                systemSymbolName: "photo.on.rectangle",
+                accessibilityDescription: "Wallpaper Selector"
+            )
         }
         statusItem?.menu = menu.menu
         updateMenu()

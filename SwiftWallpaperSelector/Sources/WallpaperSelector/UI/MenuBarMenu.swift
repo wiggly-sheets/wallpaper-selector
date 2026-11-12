@@ -148,6 +148,8 @@ final class MenuBarMenu: NSObject {
         rotationItem.title = state.isRotationActive ? "Stop Rotation" : "Start Rotation"
         rotationItem.isEnabled = !state.isRotationControlDisabled
         allSpacesItem.state = state.allSpaces ? .on : .off
+        // A setting that was stored on a newer macOS can be turned off here.
+        allSpacesItem.isEnabled = AllSpacesSupport.isAvailable || state.allSpaces
         appearanceItem.state = state.matchSystemAppearance ? .on : .off
         updateRecentWallpapers(state.recentWallpapers)
         updateRotateSubmenu(with: state)

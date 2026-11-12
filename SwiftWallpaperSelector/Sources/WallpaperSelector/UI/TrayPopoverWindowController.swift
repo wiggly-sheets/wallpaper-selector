@@ -51,7 +51,7 @@ final class TrayPopoverWindowController: NSWindowController {
         window.contentView = backgroundView
         hostingView.frame = backgroundView.bounds
         window.isReleasedWhenClosed = false
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         window.level = .floating
         window.backgroundColor = .clear
         window.isOpaque = false

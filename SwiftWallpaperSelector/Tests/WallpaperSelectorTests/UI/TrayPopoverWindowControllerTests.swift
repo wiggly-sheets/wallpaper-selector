@@ -265,6 +265,19 @@ final class TrayPopoverWindowControllerTests: XCTestCase {
         XCTAssertEqual(inside.y, 200)
     }
 
+    /// The popover must be able to show over a full-screen app.
+    func testThePopoverShowsOverFullScreenApps() throws {
+        let (controller, _) = try makeController()
+
+        let behavior = try XCTUnwrap(controller.window?.collectionBehavior)
+        XCTAssertTrue(
+            behavior.contains(.fullScreenAuxiliary),
+            "The popover has to join the full-screen space of the active app"
+        )
+        XCTAssertTrue(behavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(behavior.contains(.stationary))
+    }
+
     /// A controller with an app state that has no wallpapers.
     private func makeController() throws -> (TrayPopoverWindowController, TestSettingsContext) {
         let context = try TestSettingsContext()

@@ -23,6 +23,10 @@ struct TrayPopoverView: View {
             .padding(8)
         }
         .frame(width: 300)
+        .onAppear {
+            // Files can be added or removed while the popover is closed.
+            viewModel.refreshImagesFromDisk()
+        }
     }
 
 
@@ -94,9 +98,9 @@ struct TrayPopoverView: View {
 
     private var shuffleControls: some View {
         HStack(spacing: 4) {
-            rotateButton("←", enabled: shuffleEnabled, action: viewModel.previous)
-            rotateButton("↺", enabled: shuffleEnabled, action: viewModel.shuffle)
-            rotateButton("→", enabled: shuffleEnabled, action: viewModel.next)
+            rotateButton("←", label: "Previous wallpaper", enabled: shuffleEnabled, action: viewModel.previous)
+            rotateButton("↺", label: "Shuffle wallpaper", enabled: shuffleEnabled, action: viewModel.shuffle)
+            rotateButton("→", label: "Next wallpaper", enabled: shuffleEnabled, action: viewModel.next)
         }
         .frame(maxWidth: .infinity)
     }
@@ -122,6 +126,17 @@ struct TrayPopoverView: View {
                             }
                         }
                         .onTapGesture {
+                            viewModel.selectWallpaper(url)
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(url.lastPathComponent)
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAddTraits(
+                            url.path == viewModel.currentWallpaperPath
+                                ? .isSelected
+                                : AccessibilityTraits()
+                        )
+                        .accessibilityAction {
                             viewModel.selectWallpaper(url)
                         }
                 }
@@ -152,14 +167,12 @@ struct TrayPopoverView: View {
 
                 Spacer()
 
+                // The wallpaper controls are in the top row. This row holds
+                // the theme controls only.
                 HStack(spacing: 2) {
-                    rotateButton("←", enabled: autoEnabled, action: viewModel.previous)
-                    rotateButton("↺", enabled: autoEnabled, action: viewModel.shuffle)
-                    rotateButton("→", enabled: autoEnabled, action: viewModel.next)
-                    Divider().frame(height: 16)
-                    rotateButton("≪", enabled: viewModel.isThemeActionEnabled, action: viewModel.themePrevious)
-                    rotateButton("◊", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeShuffle)
-                    rotateButton("≫", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeNext)
+                    rotateButton("≪", label: "Previous theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themePrevious)
+                    rotateButton("◊", label: "Shuffle theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeShuffle)
+                    rotateButton("≫", label: "Next theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeNext)
                 }
             }
         }
@@ -170,10 +183,6 @@ struct TrayPopoverView: View {
             get: { viewModel.intervalMinutes },
             set: { viewModel.setInterval($0) }
         )
-    }
-
-    private var autoEnabled: Bool {
-        viewModel.intervalMinutes != .off && shuffleEnabled
     }
 
 
@@ -188,6 +197,12 @@ struct TrayPopoverView: View {
         }
         .toggleStyle(.switch)
         .controlSize(.small)
+        // The toggle can always be turned off: a setting that was stored on
+        // a newer macOS must be clearable here.
+        .disabled(!AllSpacesSupport.isAvailable && !viewModel.allSpaces)
+        .help(AllSpacesSupport.isAvailable
+              ? "Puts the wallpaper on every Space"
+              : "Needs macOS 14 or newer.")
     }
 
     private var allSpacesBinding: Binding<Bool> {
@@ -198,13 +213,15 @@ struct TrayPopoverView: View {
     }
 
 
-    private func rotateButton(_ title: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func rotateButton(_ title: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13, weight: .medium))
         }
         .buttonStyle(.borderless)
         .disabled(!enabled)
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 

@@ -32,10 +32,15 @@ struct PickerWindow: View {
 
                 Toggle(isOn: $settingsViewModel.allSpaces) {
                     Label("All Spaces", systemImage: "rectangle.stack")
-                        .help("Puts the wallpaper on every Space")
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                // The toggle can always be turned off: a setting that was
+                // stored on a newer macOS must be clearable here.
+                .disabled(!AllSpacesSupport.isAvailable && !settingsViewModel.allSpaces)
+                .help(AllSpacesSupport.isAvailable
+                      ? "Puts the wallpaper on every Space"
+                      : "Needs macOS 14 or newer.")
                 .onChange(of: settingsViewModel.allSpaces) { newValue in
                     settingsViewModel.setAllSpaces(newValue)
                 }
@@ -46,18 +51,24 @@ struct PickerWindow: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(!settingsViewModel.hasFolders || appState.isRotationBusy)
+                    .help("Previous wallpaper")
+                    .accessibilityLabel("Previous wallpaper")
 
                     Button(action: { appState.shuffleWallpaper() }) {
                         Image(systemName: "shuffle")
                     }
                     .buttonStyle(.borderless)
                     .disabled(!settingsViewModel.hasFolders || appState.isRotationBusy)
+                    .help("Shuffle wallpaper")
+                    .accessibilityLabel("Shuffle wallpaper")
 
                     Button(action: { appState.applyNextWallpaper() }) {
                         Image(systemName: "chevron.right")
                     }
                     .buttonStyle(.borderless)
                     .disabled(!settingsViewModel.hasFolders || appState.isRotationBusy)
+                    .help("Next wallpaper")
+                    .accessibilityLabel("Next wallpaper")
                 }
 
                 Button(action: { showingRotationDialog = true }) {
@@ -157,6 +168,17 @@ struct PickerWindow: View {
                                     .onTapGesture {
                                         appState.setWallpaper(url)
                                     }
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityLabel(url.lastPathComponent)
+                                    .accessibilityAddTraits(.isButton)
+                                    .accessibilityAddTraits(
+                                        appState.isCurrentWallpaper(url.path)
+                                            ? .isSelected
+                                            : AccessibilityTraits()
+                                    )
+                                    .accessibilityAction {
+                                        appState.setWallpaper(url)
+                                    }
                             }
                         }
                         .padding()
@@ -187,6 +209,10 @@ struct PickerWindow: View {
                 .environmentObject(settingsViewModel)
                 .environmentObject(appState)
                 .frame(width: 440, height: 400)
+        }
+        .onAppear {
+            // Files can be added or removed while the window is closed.
+            appState.refreshImagesFromDisk()
         }
     }
 

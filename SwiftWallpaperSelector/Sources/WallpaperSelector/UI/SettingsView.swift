@@ -22,11 +22,20 @@ struct SettingsView: View {
 
                 if selectedCategory == .general {
                 Section("General") {
-                    Toggle("Launch at Login", isOn: $viewModel.launchAtLogin)
+                    Toggle("Launch at Login", isOn: launchAtLoginBinding)
                         .accessibilityLabel("Launch at login toggle")
-                        .onChange(of: viewModel.launchAtLogin) { newValue in
-                            viewModel.setLaunchAtLogin(newValue)
+                        .help("Opens Wallpaper Selector when you log in.")
+
+                    if let message = viewModel.launchAtLoginMessage {
+                        HStack {
+                            Label(message, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                            Spacer()
+                            Button("Open Login Items…", action: viewModel.openLaunchAtLoginSettings)
                         }
+                    }
 
                     Picker("Recent Wallpapers", selection: $viewModel.historyLimit) {
                         Text("5").tag(5)
@@ -91,6 +100,12 @@ struct SettingsView: View {
 
                     Toggle("All Spaces", isOn: $viewModel.allSpaces)
                         .accessibilityLabel("All spaces toggle")
+                        // The toggle can always be turned off: a setting that
+                        // was stored on a newer macOS must be clearable here.
+                        .disabled(!AllSpacesSupport.isAvailable && !viewModel.allSpaces)
+                        .help(AllSpacesSupport.isAvailable
+                              ? "Puts the wallpaper on every Space"
+                              : "Needs macOS 14 or newer.")
                         .onChange(of: viewModel.allSpaces) { viewModel.setAllSpaces($0) }
 
                     Text("Puts the wallpaper on every Space. Needs macOS 14 or newer.")
@@ -175,15 +190,30 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
 
                     ForEach(viewModel.folderPaths, id: \.self) { path in
-                        Text(path)
-                            .font(.subheadline)
+                        HStack {
+                            Text(path)
+                                .font(.subheadline)
+                            Spacer()
+                            Button {
+                                viewModel.removeFolder(path)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove folder")
+                        }
                     }
                     .onDelete { indexSet in
                         // The settings publish synchronously, so the array shrinks
                         // while the rows are removed. Work on a snapshot.
-                        let paths = viewModel.folderPaths
-                        for index in indexSet {
-                            viewModel.removeFolder(paths[index])
+                        let paths = indexSet.compactMap { index in
+                            viewModel.folderPaths.indices.contains(index)
+                                ? viewModel.folderPaths[index]
+                                : nil
+                        }
+                        for path in paths {
+                            viewModel.removeFolder(path)
                         }
                     }
 
@@ -204,21 +234,36 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
 
                     ForEach(viewModel.themes) { theme in
-                        VStack(alignment: .leading) {
-                            Text(theme.displayName)
-                                .font(.subheadline)
-                            Text("Folders: \(theme.folderPaths.count)")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(theme.displayName)
+                                    .font(.subheadline)
+                                Text("Folders: \(theme.folderPaths.count)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                            Spacer()
+                            Button {
+                                viewModel.removeTheme(id: theme.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove theme")
                         }
-                        .padding(.vertical, 2)
                     }
                     .onDelete { indexSet in
                         // The settings publish synchronously, so the array shrinks
                         // while the rows are removed. Work on a snapshot.
-                        let themes = viewModel.themes
-                        for index in indexSet {
-                            viewModel.removeTheme(id: themes[index].id)
+                        let themes = indexSet.compactMap { index in
+                            viewModel.themes.indices.contains(index)
+                                ? viewModel.themes[index]
+                                : nil
+                        }
+                        for theme in themes {
+                            viewModel.removeTheme(id: theme.id)
                         }
                     }
 
@@ -283,6 +328,18 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
+    }
+
+    /// The toggle runs the registration itself.
+    ///
+    /// A change handler on the published value would fire again when the
+    /// registration writes the status back, so the toggle could clear the
+    /// error and spring back without a message.
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.launchAtLogin },
+            set: { viewModel.setLaunchAtLogin($0) }
+        )
     }
 }
 

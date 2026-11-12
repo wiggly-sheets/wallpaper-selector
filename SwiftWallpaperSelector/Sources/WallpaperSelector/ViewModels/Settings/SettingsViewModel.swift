@@ -61,6 +61,11 @@ final class SettingsViewModel: ObservableObject {
     /// settings error, which would wipe the shortcut failure right away.
     @Published private(set) var hotKeyErrorMessage: String? = nil
 
+    /// The message of the Launch at Login toggle: the approval of the system
+    /// or the failure of the registration. Kept apart from
+    /// `settingsErrorMessage` for the same reason as the shortcut failure.
+    @Published private(set) var launchAtLoginMessage: String? = nil
+
     /// The last wallpaper failure. The menu bar shows it too, and the README
     /// promises it in the Settings window.
     @Published private(set) var wallpaperErrorMessage: String? = nil
@@ -108,7 +113,28 @@ final class SettingsViewModel: ObservableObject {
                 self?.allFolderImages = images
             }
             .store(in: &cancellables)
+
+        // Both values are read once here instead of on every settings
+        // publish: the login item status is a launchd call and the settings
+        // location check resolves symlinks.
+        launchAtLogin = self.launchAtLoginManager.isEnabled
+        if self.launchAtLoginManager.requiresApproval {
+            launchAtLoginMessage = Self.launchAtLoginApprovalMessage
+        }
+        settingsFolderPath = appState.settingsManager.isUsingDefaultSettingsDirectory
+            ? nil
+            : appState.settingsManager.settingsDirectory.path
+
+        // The approval happens in System Settings while the app is in the
+        // background, so the status and the message follow the app waking up.
+        NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.refreshLaunchAtLoginStatus() }
+            .store(in: &cancellables)
     }
+
+    private static let launchAtLoginApprovalMessage =
+        "Approve Wallpaper Selector in System Settings > General > Login Items."
 
 
     var hasFolders: Bool {
@@ -162,7 +188,6 @@ final class SettingsViewModel: ObservableObject {
             newSettings.folderPaths.append(absolutePath)
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func removeFolder(_ path: String) {
@@ -174,7 +199,6 @@ final class SettingsViewModel: ObservableObject {
             }
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func replaceFolder(oldPath: String, with newPath: String) {
@@ -224,15 +248,17 @@ final class SettingsViewModel: ObservableObject {
             }
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     /// Moves a wallpaper that lives under the renamed folder to the new
     /// folder. A wallpaper outside the folder keeps its path.
     private func remappedPath(_ path: String?, from oldPath: String, to newPath: String) -> String? {
         guard let path else { return nil }
-        guard path.hasPrefix(oldPath + "/") else { return path }
-        return newPath + String(path.dropFirst(oldPath.count))
+        // The canonical old path ends without a slash, so a folder the user
+        // named with a trailing slash cannot produce a double slash.
+        let prefix = URL(fileURLWithPath: oldPath).standardizedFileURL.path + "/"
+        guard path.hasPrefix(prefix) else { return path }
+        return newPath + "/" + String(path.dropFirst(prefix.count))
     }
 
     func editFolder(id: String, newPath: String) {
@@ -247,7 +273,6 @@ final class SettingsViewModel: ObservableObject {
             newSettings.themes.append(theme)
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func editTheme(id: String, name: String? = nil, folderPaths: [String]? = nil,
@@ -259,7 +284,6 @@ final class SettingsViewModel: ObservableObject {
             if let lightWallpaper { settings.themes[index].lightWallpaper = lightWallpaper }
             if let darkWallpaper { settings.themes[index].darkWallpaper = darkWallpaper }
         }
-        syncFromAppState(appState.settings)
     }
 
     func replaceTheme(id: String, with replacement: Theme) {
@@ -273,7 +297,6 @@ final class SettingsViewModel: ObservableObject {
                 darkWallpaper: replacement.darkWallpaper
             )
         }
-        syncFromAppState(appState.settings)
     }
 
     func removeTheme(id: String) {
@@ -297,7 +320,6 @@ final class SettingsViewModel: ObservableObject {
             }
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
 
@@ -307,7 +329,6 @@ final class SettingsViewModel: ObservableObject {
             newSettings.matchSystemAppearance = enabled
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func toggleMatchSystemAppearance() {
@@ -315,12 +336,14 @@ final class SettingsViewModel: ObservableObject {
     }
 
     func setAllSpaces(_ enabled: Bool) {
+        // The feature does not exist before macOS 14, so the setting cannot
+        // be turned on there.
+        guard enabled == false || AllSpacesSupport.isAvailable else { return }
         appState.updateSettings { settings in
             var newSettings = settings
             newSettings.allSpaces = enabled
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func toggleAllSpaces() {
@@ -334,7 +357,6 @@ final class SettingsViewModel: ObservableObject {
             newSettings.intervalMinutes = interval
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func setRotationAction(_ action: RotationAction) {
@@ -343,7 +365,6 @@ final class SettingsViewModel: ObservableObject {
             newSettings.rotationAction = action
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     /// The actions the rotation picker offers. A theme action needs a theme,
@@ -364,7 +385,6 @@ final class SettingsViewModel: ObservableObject {
             }
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func setShortcuts(_ shortcuts: Shortcuts) {
@@ -373,7 +393,6 @@ final class SettingsViewModel: ObservableObject {
             newSettings.shortcuts = shortcuts
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func setShowMainShortcut(_ shortcut: String?) {
@@ -413,7 +432,6 @@ final class SettingsViewModel: ObservableObject {
                 settings.themes.contains(where: { $0.id == candidate }) ? candidate : nil
             }
         }
-        syncFromAppState(appState.settings)
     }
 
     func setAppearanceOverrides(
@@ -429,7 +447,6 @@ final class SettingsViewModel: ObservableObject {
             settings.allFoldersLightWallpaper = lightWallpaper
             settings.allFoldersDarkWallpaper = darkWallpaper
         }
-        syncFromAppState(appState.settings)
     }
 
     func setAppearanceThemeIDs(light: String?, dark: String?) {
@@ -438,7 +455,6 @@ final class SettingsViewModel: ObservableObject {
             settings.appearanceLightThemeID = light.flatMap { themeIDs.contains($0) ? $0 : nil }
             settings.appearanceDarkThemeID = dark.flatMap { themeIDs.contains($0) ? $0 : nil }
         }
-        syncFromAppState(appState.settings)
     }
 
     func setAppearanceWallpapers(light: String?, dark: String?, forThemeID themeID: String?) {
@@ -458,7 +474,6 @@ final class SettingsViewModel: ObservableObject {
                 settings.allFoldersDarkWallpaper = dark
             }
         }
-        syncFromAppState(appState.settings)
     }
 
     /// Stores the appearance configuration of the Appearance sheet.
@@ -492,7 +507,6 @@ final class SettingsViewModel: ObservableObject {
             }
             settings = newSettings
         }
-        syncFromAppState(appState.settings)
     }
 
     func persistAppearanceOverrides() {
@@ -535,10 +549,34 @@ final class SettingsViewModel: ObservableObject {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
-        if case .failure(let error) = launchAtLoginManager.setEnabled(enabled) {
-            settingsErrorMessage = "Could not update Launch at Login: \(error.localizedDescription)"
+        switch launchAtLoginManager.setEnabled(enabled) {
+        case .failure(let error):
+            launchAtLoginMessage = "Could not update Launch at Login: \(error.localizedDescription)"
+        case .success:
+            launchAtLoginMessage = launchAtLoginManager.requiresApproval
+                ? Self.launchAtLoginApprovalMessage
+                : nil
         }
+        // A registration that waits for the approval of the system already
+        // counts as on, so the toggle stays on.
         launchAtLogin = launchAtLoginManager.isEnabled
+    }
+
+    /// Re-reads the login item status when the app becomes active.
+    ///
+    /// Only the approval notice is cleared or set here. A registration
+    /// failure keeps its message, because becoming active does not fix it.
+    private func refreshLaunchAtLoginStatus() {
+        launchAtLogin = launchAtLoginManager.isEnabled
+        if launchAtLoginManager.requiresApproval {
+            launchAtLoginMessage = Self.launchAtLoginApprovalMessage
+        } else if launchAtLoginMessage == Self.launchAtLoginApprovalMessage {
+            launchAtLoginMessage = nil
+        }
+    }
+
+    func openLaunchAtLoginSettings() {
+        launchAtLoginManager.openLoginItemsSettings()
     }
 
     func setThemeSource(_ source: ThemeSource) {
@@ -628,12 +666,7 @@ final class SettingsViewModel: ObservableObject {
         allFoldersDarkWallpaper = settings.allFoldersDarkWallpaper
         activeThemeID = settings.activeThemeID
 
-        launchAtLogin = launchAtLoginManager.isEnabled
-
         themeSource = currentThemeSource
-        settingsFolderPath = appState.settingsManager.isUsingDefaultSettingsDirectory
-            ? nil
-            : appState.settingsManager.settingsDirectory.path
         currentThemeImages = appState.currentThemeImages
         allFolderImages = appState.allFolderImages
     }

@@ -114,7 +114,16 @@ final class TrayPopoverViewModel: ObservableObject {
     }
 
     func setAllSpaces(_ enabled: Bool) {
+        // The feature does not exist before macOS 14, so the setting cannot
+        // be turned on there.
+        guard enabled == false || AllSpacesSupport.isAvailable else { return }
         appState.updateSettings { $0.allSpaces = enabled }
+    }
+
+    /// Reads the folders from disk again, so the popover shows files that
+    /// were added or removed while it was closed.
+    func refreshImagesFromDisk() {
+        appState.refreshImagesFromDisk()
     }
 
     func openSettings() {
