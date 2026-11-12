@@ -81,6 +81,42 @@ final class RotationServiceTests: XCTestCase {
     }
 
 
+    /// A tick that was queued before the user turned rotation off must not
+    /// apply a wallpaper.
+    func testATickDoesNothingWhenRotationIsOff() async throws {
+        let folderURL = try makeFolder(named: "tick-off-images", images: ["a.png"])
+        settingsManager.update { s in
+            s.folderPaths = [folderURL.path]
+            s.rotationAction = .shuffle
+            s.intervalMinutes = .off
+            s.matchSystemAppearance = false
+        }
+
+        rotationService.tick()
+        // A tick that is not guarded would apply the wallpaper on the next
+        // turn of the main actor, so give a queued task the chance to run.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertTrue(mockProvider.appliedURLs.isEmpty)
+    }
+
+    /// A tick must not apply a wallpaper while the appearance is matched: the
+    /// system chooses the wallpaper then.
+    func testATickDoesNothingWhileTheAppearanceIsMatched() async throws {
+        let folderURL = try makeFolder(named: "tick-appearance-images", images: ["a.png"])
+        settingsManager.update { s in
+            s.folderPaths = [folderURL.path]
+            s.rotationAction = .shuffle
+            s.intervalMinutes = .hour1
+            s.matchSystemAppearance = true
+        }
+
+        rotationService.tick()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertTrue(mockProvider.appliedURLs.isEmpty)
+    }
+
     func testShuffleSelectsFromAvailableImages() async throws {
         let folderURL = settingsContext.directory(named: "shuffle-images")
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)

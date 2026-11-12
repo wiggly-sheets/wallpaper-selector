@@ -62,6 +62,10 @@ final class AppCoordinator: ObservableObject {
         let applier = allSpacesApplier
         let wallpaperProvider = injectedWallpaperProvider ?? WallpaperProvider(
             applyToAllSpaces: { url in
+                // The feature does not exist before macOS 14. A setting that
+                // was stored on a newer macOS must never touch the store of
+                // an older system.
+                guard AllSpacesSupport.isAvailable else { return }
                 // The user can turn the setting off at any moment, so it is
                 // read when the wallpaper is applied and not when the app
                 // starts.
@@ -180,12 +184,11 @@ final class AppCoordinator: ObservableObject {
             // global state on its own.
         }
 
-        let appearanceContextChanged = previous.matchSystemAppearance != current.matchSystemAppearance
-            || previous.appearanceLightThemeID != current.appearanceLightThemeID
-            || previous.appearanceDarkThemeID != current.appearanceDarkThemeID
-            || previous.allFoldersLightWallpaper != current.allFoldersLightWallpaper
-            || previous.allFoldersDarkWallpaper != current.allFoldersDarkWallpaper
-            || previous.themes != current.themes
+        // Only the effective appearance context re-applies the pin: renaming
+        // or adding a theme that is not the appearance theme must not
+        // overwrite a wallpaper the user picked by hand.
+        let appearanceContextChanged = appearanceContext(of: previous)
+            != appearanceContext(of: current)
 
         if current.matchSystemAppearance && appearanceContextChanged {
             // The wallpaper application writes the settings again. Running it
@@ -194,6 +197,50 @@ final class AppCoordinator: ObservableObject {
                 self?.appearanceMonitor.applyAppearanceWallpaperIfNeeded()
             }
         }
+    }
+
+    /// The part of the settings that decides which wallpaper applies for the
+    /// system appearance.
+    ///
+    /// The pins are read the way the appearance monitor reads them: from the
+    /// theme an appearance uses, or from the pins of all folders when no such
+    /// theme exists.
+    private struct AppearanceContext: Equatable {
+        let matchSystemAppearance: Bool
+        let lightThemeID: String?
+        let darkThemeID: String?
+        let lightPin: String?
+        let darkPin: String?
+        /// The folder scope of the appearance theme. When it has no pin, its
+        /// folders choose the fallback wallpaper, so a change re-applies it.
+        let lightFolders: [String]
+        let darkFolders: [String]
+    }
+
+    private func appearanceContext(of settings: WallpaperSettings) -> AppearanceContext {
+        let lightTheme = settings.appearanceLightThemeID.flatMap { id in
+            settings.themes.first { $0.id == id }
+        }
+        let darkTheme = settings.appearanceDarkThemeID.flatMap { id in
+            settings.themes.first { $0.id == id }
+        }
+        // A theme without folders of its own uses the global list, the same
+        // scope the appearance monitor reads the fallback wallpaper from.
+        let lightFolders = lightTheme.map { theme in
+            theme.folderPaths.isEmpty ? settings.folderPaths : theme.folderPaths
+        } ?? settings.folderPaths
+        let darkFolders = darkTheme.map { theme in
+            theme.folderPaths.isEmpty ? settings.folderPaths : theme.folderPaths
+        } ?? settings.folderPaths
+        return AppearanceContext(
+            matchSystemAppearance: settings.matchSystemAppearance,
+            lightThemeID: settings.appearanceLightThemeID,
+            darkThemeID: settings.appearanceDarkThemeID,
+            lightPin: lightTheme.map(\.lightWallpaper) ?? settings.allFoldersLightWallpaper,
+            darkPin: darkTheme.map(\.darkWallpaper) ?? settings.allFoldersDarkWallpaper,
+            lightFolders: lightFolders,
+            darkFolders: darkFolders
+        )
     }
 
     /// Puts the wallpaper that is on the screen on every Space.

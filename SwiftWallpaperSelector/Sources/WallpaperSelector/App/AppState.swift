@@ -40,6 +40,16 @@ final class AppState: ObservableObject {
     private var allFolderImageLoadTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
+    /// The folder lists the image loads were started for.
+    ///
+    /// A settings change that only moves the current wallpaper or the history
+    /// leaves both lists alone, so it must not cancel and restart the scans.
+    private struct DerivedInputs: Equatable {
+        let effective: [String]
+        let all: [String]
+    }
+    private var loadedDerivedInputs: DerivedInputs?
+
     /// Counts the published settings. A change during a publish means that a
     /// subscriber wrote settings while the change was delivered.
     private var settingsGeneration: UInt = 0
@@ -124,6 +134,9 @@ final class AppState: ObservableObject {
 
     func setActiveTheme(_ themeID: String?) {
         guard themeID == nil || settings.themes.contains(where: { $0.id == themeID }) else { return }
+        // Selecting the theme that is already active must not shuffle the
+        // wallpaper: the tap did not change anything.
+        guard themeID != settings.activeThemeID else { return }
         updateSettings { $0.activeThemeID = themeID }
         if !settingsManager.settings.matchSystemAppearance {
             rotationService.enqueue(.shuffle)
@@ -166,10 +179,28 @@ final class AppState: ObservableObject {
         refreshDerivedState()
     }
 
+    /// Reads the folders from disk again.
+    ///
+    /// A folder list that did not change does not restart the scans, so a
+    /// file that was added or removed while the app runs would only show up
+    /// after a restart or a settings change. The views call this when they
+    /// appear, so the grid shows the files that are on the disk now.
+    func refreshImagesFromDisk() {
+        loadedDerivedInputs = nil
+        refreshDerivedState()
+    }
+
     func refreshDerivedState() {
         effectiveFolders = themeProvider.effectiveFolders()
         currentWallpaperURL = settings.currentWallpaper.map(URL.init(fileURLWithPath:))
         let allFolders = settings.folderPaths
+        let inputs = DerivedInputs(effective: effectiveFolders, all: allFolders)
+        // A rotation writes the current wallpaper and the history on every
+        // tick. Those changes do not move the folders, so they must not
+        // cancel and restart the scans.
+        guard inputs != loadedDerivedInputs else { return }
+        loadedDerivedInputs = inputs
+
         guard effectiveFolders != allFolders else {
             // The effective scope is the global folder list: one load serves
             // both lists, so the folders are not read from disk twice.

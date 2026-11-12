@@ -284,4 +284,150 @@ final class AppStateTests: XCTestCase {
             "The deferral message must survive the settings change"
         )
     }
+
+    /// A rotation writes the current wallpaper and the history on every tick.
+    /// Those changes do not move the folders, so they must not cancel and
+    /// restart the image scans.
+    func testACurrentWallpaperChangeDoesNotReloadTheFolderImages() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let themeProvider = ThemeProvider(settingsManager: settingsManager)
+        let library = WallpaperLibrary()
+        let appState = AppState(
+            settingsManager: settingsManager,
+            rotationService: RotationService(
+                settingsManager: settingsManager,
+                wallpaperProvider: MockWallpaperProvider(),
+                themeProvider: themeProvider,
+                wallpaperLibrary: WallpaperLibrary()
+            ),
+            themeProvider: themeProvider,
+            wallpaperLibrary: library
+        )
+
+        let folder = context.directory(named: "derived-images")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let image = folder.appendingPathComponent("a.png")
+        try Data().write(to: image)
+
+        settingsManager.update { $0.folderPaths = [folder.path] }
+
+        let deadline = Date().addingTimeInterval(10)
+        while appState.currentThemeImages.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(appState.currentThemeImages, [image])
+        let loadsAfterTheFolderChange = await library.loadCount
+
+        settingsManager.update {
+            $0.currentWallpaper = image.path
+            $0.wallpaperHistory = [image.path]
+        }
+        // Give a wrongly restarted scan the chance to run.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        let loadsAfterTheWallpaperChange = await library.loadCount
+        XCTAssertEqual(
+            loadsAfterTheWallpaperChange,
+            loadsAfterTheFolderChange,
+            "A wallpaper change does not move the folders, so the images must not be reloaded"
+        )
+        XCTAssertEqual(appState.currentWallpaperURL, image)
+    }
+
+    /// A file that is added while the app runs has to show up without a
+    /// restart. The folder lists do not change, so only the explicit refresh
+    /// reads the folder again.
+    func testRefreshImagesFromDiskPicksUpANewFile() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let themeProvider = ThemeProvider(settingsManager: settingsManager)
+        let library = WallpaperLibrary()
+        let appState = AppState(
+            settingsManager: settingsManager,
+            rotationService: RotationService(
+                settingsManager: settingsManager,
+                wallpaperProvider: MockWallpaperProvider(),
+                themeProvider: themeProvider,
+                wallpaperLibrary: WallpaperLibrary()
+            ),
+            themeProvider: themeProvider,
+            wallpaperLibrary: library
+        )
+
+        let folder = context.directory(named: "refreshed-images")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let firstImage = folder.appendingPathComponent("a.png")
+        try Data().write(to: firstImage)
+
+        settingsManager.update { $0.folderPaths = [folder.path] }
+
+        let deadline = Date().addingTimeInterval(10)
+        while appState.currentThemeImages.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(appState.currentThemeImages, [firstImage])
+
+        let addedImage = folder.appendingPathComponent("b.png")
+        try Data().write(to: addedImage)
+        // The folder scan caches by the modification date of the folder, so
+        // the new file has to move it.
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(60)],
+            ofItemAtPath: folder.path
+        )
+
+        appState.refreshImagesFromDisk()
+
+        let refreshed = Date().addingTimeInterval(10)
+        while !appState.currentThemeImages.contains(addedImage), Date() < refreshed {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(
+            appState.currentThemeImages.contains(addedImage),
+            "A file added while the app runs has to show up after a refresh"
+        )
+        let loads = await library.loadCount
+        XCTAssertGreaterThan(loads, 1, "The refresh has to ask the library for the images again")
+    }
+
+    /// Selecting the theme that is already active changes nothing, so it must
+    /// not shuffle the wallpaper.
+    func testSelectingTheAlreadyActiveThemeDoesNotShuffleTheWallpaper() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let themeProvider = ThemeProvider(settingsManager: settingsManager)
+        let mockProvider = MockWallpaperProvider()
+        let appState = AppState(
+            settingsManager: settingsManager,
+            rotationService: RotationService(
+                settingsManager: settingsManager,
+                wallpaperProvider: mockProvider,
+                themeProvider: themeProvider,
+                wallpaperLibrary: WallpaperLibrary()
+            ),
+            themeProvider: themeProvider,
+            wallpaperLibrary: WallpaperLibrary()
+        )
+
+        let folder = context.directory(named: "active-theme-images")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data().write(to: folder.appendingPathComponent("a.png"))
+        let theme = Theme(id: "active", name: "Active", folderPaths: [folder.path])
+        settingsManager.update {
+            $0.folderPaths = [folder.path]
+            $0.themes = [theme]
+            $0.activeThemeID = theme.id
+            $0.matchSystemAppearance = false
+        }
+
+        appState.setActiveTheme(theme.id)
+        // A shuffle would be enqueued on the next turn of the main actor.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertTrue(
+            mockProvider.appliedURLs.isEmpty,
+            "Selecting the already-active theme must not shuffle the wallpaper"
+        )
+    }
 }

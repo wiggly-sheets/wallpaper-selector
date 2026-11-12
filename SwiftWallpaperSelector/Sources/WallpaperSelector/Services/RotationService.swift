@@ -103,7 +103,13 @@ final class RotationService: NSObject, ObservableObject {
     }
 
     func tick() {
-        enqueue(settingsManager.settings.rotationAction)
+        // The timer can fire after the user turned rotation off or turned on
+        // appearance matching: a tick that is already queued must not apply a
+        // wallpaper any more.
+        let settings = settingsManager.settings
+        guard settings.intervalMinutes != .off,
+              !settings.matchSystemAppearance else { return }
+        enqueue(settings.rotationAction)
     }
 
     func enqueue(_ action: RotationAction) {
@@ -277,6 +283,14 @@ final class RotationService: NSObject, ObservableObject {
         }
 
         let images = await wallpaperLibrary.imageURLs(in: folders)
+        // The scan can be slow and the appearance can change while it runs:
+        // the folder set may no longer be the one this action started with.
+        // Applying an image of the old one would put a light-appearance
+        // wallpaper on a dark system.
+        guard themeProvider.effectiveFolders() == folders else {
+            setError("The wallpaper folders changed while the wallpaper was chosen. Choose again.")
+            return nil
+        }
         guard !images.isEmpty else {
             setError("No wallpaper images were found in the selected folders.")
             return nil

@@ -194,6 +194,58 @@ final class AppCoordinatorTests: XCTestCase {
         XCTAssertEqual(wallpaperProvider.appliedURLs, [newPin.standardizedFileURL])
     }
 
+    /// A theme that has nothing to do with the appearance pin must not
+    /// re-apply the pin: that would overwrite a wallpaper the user picked by
+    /// hand.
+    func testAddingAnUnrelatedThemeDoesNotReapplyTheAppearancePin() async throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let wallpaperProvider = MockWallpaperProvider()
+        let directory = try makeWallpaperDirectory(in: context)
+        let pin = try makeImage(named: "pin.jpg", in: directory)
+        let pick = try makeImage(named: "pick.jpg", in: directory)
+        let appearanceTheme = Theme(
+            id: "appearance",
+            name: "Appearance",
+            folderPaths: [directory.path],
+            lightWallpaper: pin.path,
+            darkWallpaper: pin.path
+        )
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            themes: [appearanceTheme],
+            matchSystemAppearance: true,
+            appearanceLightThemeID: appearanceTheme.id,
+            appearanceDarkThemeID: appearanceTheme.id
+        ))
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: RecordingAllSpacesApplier(),
+            wallpaperProvider: wallpaperProvider
+        )
+        defer { _ = coordinator }
+
+        // The pin is applied at startup; the user then picks another
+        // wallpaper.
+        coordinator.appState.setWallpaper(pick)
+        XCTAssertEqual(wallpaperProvider.appliedURLs.last, pick)
+        wallpaperProvider.reset()
+
+        // The added theme is not the appearance theme, so the appearance
+        // context did not change.
+        coordinator.appState.updateSettings {
+            $0.themes.append(Theme(id: "other", name: "Other", folderPaths: [directory.path]))
+        }
+        // The re-application is scheduled on the next turn of the main actor.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertTrue(
+            wallpaperProvider.appliedURLs.isEmpty,
+            "Adding an unrelated theme must not re-apply the pin"
+        )
+        XCTAssertEqual(settingsManager.settings.currentWallpaper, pick.path)
+    }
+
     /// The wallpaper that is on the screen has to reach every Space as soon
     /// as the user turns the setting on. The user does not wait for the next
     /// rotation.
