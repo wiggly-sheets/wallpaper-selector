@@ -21,23 +21,28 @@ final class AllSpacesApplierTests: XCTestCase {
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let container: [String: Any] = [
-            "Type": "individual",
-            "Desktop": try slot(),
-        ]
+        let global = try container()
         var spaces: [String: Any] = [String: Any]()
         if let space {
             spaces["space-uuid"] = space
         }
         let store: [String: Any] = [
-            "AllSpacesAndDisplays": container,
-            "SystemDefault": container,
+            "AllSpacesAndDisplays": global,
+            "SystemDefault": global,
             "Spaces": spaces,
             "Displays": [String: Any](),
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: store, format: .binary, options: 0)
         try data.write(to: url)
         return url
+    }
+
+    /// A container of the desktop picture.
+    private func container() throws -> [String: Any] {
+        [
+            "Type": "individual",
+            "Desktop": try slot(),
+        ]
     }
 
     /// The slot of the desktop picture.
@@ -297,15 +302,11 @@ final class AllSpacesApplierTests: XCTestCase {
         XCTAssertTrue(message.contains("not running"), message)
     }
 
-    /// A Space whose wallpaper sits in a slot the app does not write keeps
-    /// its old wallpaper. The apply has to say so instead of claiming that
-    /// the wallpaper is on every Space.
+    /// The wallpaper of a Space sits in the `Default` container of the Space
+    /// record, not in a slot of the record itself.
     @MainActor
-    func testASpaceThatKeepsItsWallpaperIsReported() async throws {
-        let storeURL = try writeStore(space: [
-            "Type": "individual",
-            "Video": try slot(),
-        ])
+    func testTheWallpaperOfASpaceIsUpdated() async throws {
+        let storeURL = try writeStore(space: ["Default": try container()])
         let imageURL = try writeWallpaper()
         let agent = FakeWallpaperAgent(storeURL: storeURL)
 
@@ -317,12 +318,94 @@ final class AllSpacesApplierTests: XCTestCase {
 
         let failure = await apply(applier, imageURL)
 
-        let message = try XCTUnwrap(failure)
-        XCTAssertTrue(message.contains("every Space"), message)
-        XCTAssertTrue(
-            message.contains("Video"),
-            "The Space that keeps its wallpaper has to be named: \(message)"
+        XCTAssertNil(failure)
+        let store = try WallpaperStore().read(at: storeURL)
+        let spaces = try XCTUnwrap(store["Spaces"] as? [String: Any])
+        let space = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
+        let container = try XCTUnwrap(space["Default"] as? [String: Any])
+        let slot = try XCTUnwrap(container["Desktop"] as? [String: Any])
+        let content = try XCTUnwrap(slot["Content"] as? [String: Any])
+        let choices = try XCTUnwrap(content["Choices"] as? [[String: Any]])
+        let choice = try XCTUnwrap(choices.first)
+        let data = try XCTUnwrap(choice["Configuration"] as? Data)
+        let plist = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+        let configuration = try XCTUnwrap(plist as? [String: Any])
+        XCTAssertEqual(
+            (configuration["url"] as? [String: String])?["relative"],
+            imageURL.absoluteString
         )
+    }
+
+    /// Without a running agent there is nothing that could read the store the
+    /// app would write, so the store is never touched.
+    @MainActor
+    func testNoAgentBeforeThePatchLeavesTheStoreUnchanged() async throws {
+        let storeURL = try writeStore()
+        let before = try Data(contentsOf: storeURL)
+        let imageURL = try writeWallpaper()
+        let agent = FakeWallpaperAgent(storeURL: storeURL, initiallyRunning: false)
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent.wallpaperAgent
+        )
+
+        let failure = await apply(applier, imageURL)
+
+        let message = try XCTUnwrap(failure)
+        XCTAssertTrue(message.contains("not running"), message)
+        XCTAssertEqual(agent.restartCount, 0)
+        XCTAssertEqual(try Data(contentsOf: storeURL), before)
+    }
+
+    /// launchd can still be starting the agent when the app first looks for
+    /// it, so the applier waits for it instead of reporting it missing.
+    @MainActor
+    func testAnAgentThatStartsWithinTheGracePeriodIsUsed() async throws {
+        let storeURL = try writeStore()
+        let imageURL = try writeWallpaper()
+        let agent = FakeWallpaperAgent(storeURL: storeURL, initiallyRunning: false)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) { [agent] in
+            agent.start()
+        }
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent.wallpaperAgent
+        )
+
+        let failure = await apply(applier, imageURL)
+
+        XCTAssertNil(failure)
+        XCTAssertEqual(agent.restartCount, 1)
+    }
+
+    /// The agent can vanish between the preflight and the write. A retry then
+    /// has no old agent to wait for, so any agent that runs counts.
+    @MainActor
+    func testARetryAcceptsAnyAgentWhenTheOldOneIsGone() async throws {
+        let storeURL = try writeStore()
+        let imageURL = try writeWallpaper()
+        let lookups = AgentLookups()
+        let agent = WallpaperAgent(
+            restart: {},
+            identifiers: { lookups.next() },
+            restartTimeout: 1,
+            settleTime: 0.01
+        )
+
+        let applier = AllSpacesApplier(
+            storeURL: storeURL,
+            backupURL: backupURL,
+            agent: agent
+        )
+
+        let failure = await apply(applier, imageURL)
+
+        XCTAssertNil(failure)
+        XCTAssertEqual(lookups.count, 3, "The preflight, the write and the wait each looked once")
     }
 
     /// The agent never comes back: the wait has to give up, or the work of
@@ -395,7 +478,7 @@ final class AllSpacesApplierTests: XCTestCase {
 final class FakeWallpaperAgent: @unchecked Sendable {
     private let lock = NSLock()
     private var identifier = 1
-    private var running = true
+    private var running: Bool
     private var wroteStore = false
 
     /// The number of times the agent was restarted.
@@ -415,11 +498,13 @@ final class FakeWallpaperAgent: @unchecked Sendable {
         storeURL: URL,
         staleContent: Data? = nil,
         everyRestart: Bool = false,
+        initiallyRunning: Bool = true,
         onWrite: @escaping () -> Void = {}
     ) {
         self.storeURL = storeURL
         self.staleContent = staleContent
         self.everyRestart = everyRestart
+        self.running = initiallyRunning
         self.onWrite = onWrite
     }
 
@@ -438,6 +523,13 @@ final class FakeWallpaperAgent: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return running ? [identifier] : []
+    }
+
+    /// The agent is started, like launchd does after a moment.
+    func start() {
+        lock.lock()
+        running = true
+        lock.unlock()
     }
 
     /// The agent is killed and comes back a moment later.
@@ -463,6 +555,33 @@ final class FakeWallpaperAgent: @unchecked Sendable {
             identifier = next
             running = true
             lock.unlock()
+        }
+    }
+}
+
+/// The looks at an agent that is gone for one look.
+///
+/// The first look is the preflight, which sees a running agent. The second
+/// look is the one before the write, which sees none. Every later look sees
+/// a new agent.
+private final class AgentLookups: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lookups = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return lookups
+    }
+
+    func next() -> [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        lookups += 1
+        switch lookups {
+        case 1: return [1]
+        case 2: return []
+        default: return [2]
         }
     }
 }

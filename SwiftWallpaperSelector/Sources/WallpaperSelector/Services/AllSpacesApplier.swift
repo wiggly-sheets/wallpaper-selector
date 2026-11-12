@@ -1,5 +1,19 @@
 import Foundation
 
+/// Whether the All Spaces feature exists on this Mac.
+///
+/// The feature writes the wallpaper store of macOS 14 and newer. The toggle
+/// stays visible on macOS 13, so the user sees what the app offers, but it
+/// cannot be turned on there.
+enum AllSpacesSupport {
+    static var isAvailable: Bool {
+        if #available(macOS 14, *) {
+            return true
+        }
+        return false
+    }
+}
+
 /// The failure of an apply.
 struct AllSpacesApplyFailure: Error, LocalizedError, Equatable {
     /// The wallpaper that could not be put on every Space.
@@ -21,7 +35,6 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
     case storeFailure(reason: String)
     case agentDidNotComeBack
     case agentWasNotRunning
-    case spaceKeptItsWallpaper(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -36,11 +49,10 @@ enum AllSpacesApplierError: Error, LocalizedError, Equatable {
         case .storeFailure(let reason):
             return reason
         case .agentDidNotComeBack:
-            return "The wallpaper agent of macOS did not come back, so the wallpaper cannot be checked."
+            return "The wallpaper agent of macOS did not come back in time. "
+                + "The wallpaper store was written, but the app could not check it."
         case .agentWasNotRunning:
             return "The wallpaper agent of macOS was not running."
-        case .spaceKeptItsWallpaper(let path):
-            return "The wallpaper store holds a wallpaper that the app cannot write: \(path)."
         }
     }
 }
@@ -175,12 +187,14 @@ class AllSpacesApplier {
     /// The identifiers of the running wallpaper agent processes.
     ///
     /// The agent is an XPC service of launchd, so `NSWorkspace` does not
-    /// list it. `pgrep` finds it by its exact name. A missing `pgrep` gives
-    /// no identifier at all.
+    /// list it. `pgrep` finds it by its exact name. Only the processes of
+    /// the user of this session count, so another user of Fast User Switching
+    /// cannot make the wait think that the agent of this session is alive.
+    /// A missing `pgrep` gives no identifier at all.
     nonisolated static func runningAgentProcessIdentifiers() -> [Int] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-x", "WallpaperAgent"]
+        process.arguments = ["-x", "-u", String(getuid()), "WallpaperAgent"]
         let output = Pipe()
         process.standardOutput = output
         do {
@@ -216,10 +230,14 @@ private struct AllSpacesWork: @unchecked Sendable {
     private static let maximumAttempts = 3
 
     /// The seconds between two looks at the processes of the agent.
-    private static let pollInterval: TimeInterval = 0.05
+    private static let pollInterval: TimeInterval = 0.2
 
-    /// The seconds the apply waits when no agent can be seen.
-    private static let fallbackPause: TimeInterval = 0.3
+    /// The seconds the app waits for a running agent before the first write.
+    private static let agentStartupTimeout: TimeInterval = 1.5
+
+    /// The seconds between two tries, so launchd is not asked to respawn the
+    /// agent three times in under a second.
+    private static let retryInterval: TimeInterval = 1
 
     func run(_ imageURL: URL) -> Result<Void, AllSpacesApplyFailure> {
         do {
@@ -240,23 +258,27 @@ private struct AllSpacesWork: @unchecked Sendable {
         }
 
         try takeBackup()
+        // Without a running agent there is nothing that could read the store,
+        // so the write could not be proven. The agent is looked up once with
+        // a grace period, because launchd may still be starting it.
+        try waitForRunningAgent()
 
-        for _ in 1...Self.maximumAttempts {
+        for attempt in 1...Self.maximumAttempts {
+            if attempt > 1 {
+                Thread.sleep(forTimeInterval: Self.retryInterval)
+            }
             // The agent is looked up before it is killed, so a new agent can
-            // be told from the old one.
+            // be told from the old one. An empty list is not fatal here: the
+            // agent can vanish between the preflight and the write, and the
+            // wait below then accepts any agent that runs.
             let agentsBefore = agent.identifiers()
-            let unwritable = try patch(imageURL)
+            try patch(imageURL)
             agent.restart()
             switch waitForAgent(after: agentsBefore) {
             case .cameBack:
                 // The new agent reads the store and writes it again, so the
                 // store is given a moment before it is checked.
                 Thread.sleep(forTimeInterval: agent.settleTime)
-            case .noAgent:
-                // There was no agent that could read the store the app
-                // wrote, so the apply cannot be proven. Another try would
-                // not make the agent appear.
-                throw AllSpacesApplierError.agentWasNotRunning
             case .timedOut:
                 // The agent is still alive and can write the store from its
                 // own memory, so the wallpaper cannot be checked.
@@ -270,21 +292,28 @@ private struct AllSpacesWork: @unchecked Sendable {
             // app writes `LastSet` itself. Upgrade this when macOS can be
             // asked which wallpaper a Space shows.
             guard store.holdsWallpaper(imageURL, inStoreAt: storeURL) else { continue }
-            if let path = unwritable.first {
-                // A Space keeps its old wallpaper, so the wallpaper did not
-                // reach every Space. The app says so instead of claiming
-                // that it did.
-                throw AllSpacesApplierError.spaceKeptItsWallpaper(path: path)
-            }
             return
         }
         throw AllSpacesApplierError.verificationFailed(attempts: Self.maximumAttempts)
     }
 
+    /// Waits for a running agent before the store is written.
+    ///
+    /// The wait is a grace period: an agent that launchd is still starting is
+    /// not reported as missing right away.
+    private func waitForRunningAgent() throws {
+        let deadline = DispatchTime.now() + Self.agentStartupTimeout
+        while true {
+            guard agent.identifiers().isEmpty else { return }
+            guard DispatchTime.now() < deadline else {
+                throw AllSpacesApplierError.agentWasNotRunning
+            }
+            Thread.sleep(forTimeInterval: Self.pollInterval)
+        }
+    }
+
     /// What the wait for the wallpaper agent saw.
     private enum AgentWait {
-        /// There was no agent to watch.
-        case noAgent
         /// A new agent came back.
         case cameBack
         /// The agent was running and did not come back in time.
@@ -296,33 +325,28 @@ private struct AllSpacesWork: @unchecked Sendable {
     /// The store is only checked after the agent came back: an agent that is
     /// still alive can write the store from its own memory, and then the
     /// check would pass while the wallpaper is gone a moment later.
+    ///
+    /// An empty `previous` means that no agent was seen before the write, so
+    /// there is no old agent to wait for, and any running agent is the one
+    /// that reads the store.
     private func waitForAgent(after previous: [Int]) -> AgentWait {
-        guard !previous.isEmpty else {
-            // shortcut: without a running agent there is nothing to watch,
-            // so the store cannot be checked and the apply is given up.
-            // Upgrade this when the agent can be seen on every Mac.
-            Thread.sleep(forTimeInterval: Self.fallbackPause)
-            return .noAgent
-        }
-
-        let deadline = Date().addingTimeInterval(agent.restartTimeout)
+        let deadline = DispatchTime.now() + agent.restartTimeout
         while true {
             let current = agent.identifiers()
             let oldIsGone = previous.allSatisfy { !current.contains($0) }
-            let newAgentRuns = current.contains { !previous.contains($0) }
+            let newAgentRuns = previous.isEmpty
+                ? !current.isEmpty
+                : current.contains { !previous.contains($0) }
             if oldIsGone && newAgentRuns { return .cameBack }
-            guard Date() < deadline else { return .timedOut }
+            guard DispatchTime.now() < deadline else { return .timedOut }
             Thread.sleep(forTimeInterval: Self.pollInterval)
         }
     }
 
     /// Writes the wallpaper into the store.
-    ///
-    /// The result names the containers that hold a wallpaper the app cannot
-    /// write.
-    private func patch(_ imageURL: URL) throws -> [String] {
+    private func patch(_ imageURL: URL) throws {
         do {
-            return try store.setWallpaper(imageURL, inStoreAt: storeURL)
+            try store.setWallpaper(imageURL, inStoreAt: storeURL)
         } catch let error as WallpaperStoreError {
             throw AllSpacesApplierError.storeFailure(reason: error.errorDescription ?? "")
         }
@@ -331,15 +355,34 @@ private struct AllSpacesWork: @unchecked Sendable {
     /// Takes the backup of the store once.
     ///
     /// The backup is never overwritten, so it always holds the store as it
-    /// was before the app touched it.
+    /// was before All Spaces wrote it. The current-Space wallpaper may already
+    /// be applied at this point; the global and per-Space containers this
+    /// feature writes are untouched. The content is read and parsed as a
+    /// property list first, so a backup that cannot be put back is never
+    /// written.
     private func takeBackup() throws {
         guard !FileManager.default.fileExists(atPath: backupURL.path) else { return }
         do {
+            let data = try Data(contentsOf: storeURL)
+            var format = PropertyListSerialization.PropertyListFormat.binary
+            let plist = try PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: &format
+            )
+            guard plist as? [String: Any] != nil else {
+                throw AllSpacesApplierError.backupFailed(
+                    path: backupURL.path,
+                    reason: "the store is not a property list dictionary"
+                )
+            }
             try FileManager.default.createDirectory(
                 at: backupURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try FileManager.default.copyItem(at: storeURL, to: backupURL)
+            try data.write(to: backupURL, options: .atomic)
+        } catch let error as AllSpacesApplierError {
+            throw error
         } catch {
             throw AllSpacesApplierError.backupFailed(path: backupURL.path, reason: error.localizedDescription)
         }

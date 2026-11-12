@@ -35,36 +35,31 @@ enum WallpaperStoreError: Error, LocalizedError, Equatable {
 /// the file itself and restarts the agent afterwards.
 struct WallpaperStore {
 
-    /// The keys of the store root.
+    /// The keys of the store root and of a Space record.
     enum Key {
         static let globalContainer = "AllSpacesAndDisplays"
         static let systemDefault = "SystemDefault"
         static let spaces = "Spaces"
         static let displays = "Displays"
 
-        static let all: Set<String> = [globalContainer, systemDefault, spaces, displays]
+        /// The container of a Space record that holds the wallpaper of the
+        /// Space itself.
+        static let spaceDefault = "Default"
+
+        /// The kind of a container. It names the slot that macOS reads.
+        static let type = "Type"
     }
 
     /// The names of the wallpaper slots.
     ///
-    /// The name of the slot and the `Type` of its container are two different
-    /// axes: a container can hold the type `individual` and the slot
-    /// `Desktop`. The slot is therefore found by the presence of its key and
-    /// never by the type.
+    /// The `Type` of a container decides which slot macOS uses: `linked`
+    /// containers use `Linked`, every other container uses `Desktop`. The
+    /// idle slot holds the wallpaper of the idle screen, which is a different
+    /// wallpaper, so it is never touched.
     enum Slot {
         static let desktop = "Desktop"
-        static let defaultSlot = "Default"
         static let linked = "Linked"
-
-        /// The idle slot holds the wallpaper of the idle screen. It is a
-        /// different wallpaper and it is never touched.
         static let idle = "Idle"
-
-        /// The slots that hold the desktop picture.
-        static let desktopPicture = [desktop, defaultSlot, linked]
-
-        /// The keys of a container that this app understands.
-        static let known: Set<String> = Set(desktopPicture + [idle])
     }
 
     /// The provider of a wallpaper that is a single image file.
@@ -129,8 +124,9 @@ struct WallpaperStore {
     ///
     /// The file is written to a temporary file in the same folder and then
     /// renamed over the old one, so the agent never reads a half written
-    /// file. The rename drops the quarantine flag of the file, which is what
-    /// the agent does as well.
+    /// file. The rename replaces the inode, so the replacement loses the
+    /// metadata the agent keeps on its file and the agent sets that metadata
+    /// again when it rewrites the store.
     ///
     /// The temporary file is flushed before the rename and the folder is
     /// flushed after it, so a crash cannot leave a store without content.
@@ -186,76 +182,71 @@ struct WallpaperStore {
     // MARK: - The wallpaper
 
     /// Writes the wallpaper into the store file.
-    ///
-    /// The result names the containers that hold a wallpaper the app cannot
-    /// write. The wallpaper of such a container stays the old one, so the
-    /// wallpaper does not reach that Space.
-    @discardableResult
-    func setWallpaper(_ imageURL: URL, inStoreAt url: URL) throws -> [String] {
+    func setWallpaper(_ imageURL: URL, inStoreAt url: URL) throws {
         var store = try read(at: url)
         try setWallpaper(imageURL, in: &store)
-        let unwritable = unwritableWallpaperPaths(in: store)
         try write(store, to: url)
-        return unwritable
     }
 
     /// Writes the wallpaper into the store.
     ///
     /// The wallpaper is written into the global container, into the
-    /// `SystemDefault` and into every Space and Display container that holds
-    /// one, because a wallpaper of a single Space wins over the global one.
-    /// A container that holds no wallpaper is skipped, so a Space without a
-    /// wallpaper does not stop the write.
+    /// `SystemDefault`, into the `Default` container of every Space, into
+    /// every Display of a Space and into every top-level Display. A
+    /// wallpaper of a single Space wins over the global one, so every
+    /// container that exists has to be written. The global container is
+    /// required, because macOS always reads it; the other root containers
+    /// are written only when they exist, and an absent key stays absent.
     ///
-    /// The idle slot is left alone: it holds the wallpaper of the idle
-    /// screen, which is a different wallpaper.
+    /// A root key that this app does not know is left untouched, so a store
+    /// of a newer macOS version is preserved. A container that is not
+    /// understood stops the whole write, so the file is never changed
+    /// halfway.
     ///
-    /// A container that is not understood stops the whole write, so the file
-    /// is never changed halfway.
+    /// The store is patched into a local copy and assigned back only when
+    /// every container was written, so a throw cannot leave the caller with
+    /// a half-patched dictionary.
     func setWallpaper(_ imageURL: URL, in store: inout [String: Any]) throws {
         let configuration = try Self.configurationData(for: imageURL)
         let optionValues = try Self.optionValuesData()
         let now = Date()
 
-        // shortcut: a key of the root that this app does not know stops the
-        // write. A new macOS version can add one, and a half understood
-        // store is worse than no change at all.
-        for key in store.keys where !Key.all.contains(key) {
-            throw WallpaperStoreError.unexpectedShape(reason: "the store has an unknown key \(key)")
-        }
-
-        if let patched = try patched(
-            container: store[Key.globalContainer],
+        var result = store
+        result[Key.globalContainer] = try patchedContainer(
+            store[Key.globalContainer],
             at: Key.globalContainer,
             configuration: configuration,
             optionValues: optionValues,
             now: now
-        ) {
-            store[Key.globalContainer] = patched
-        }
-        if let patched = try patched(
-            container: store[Key.systemDefault],
-            at: Key.systemDefault,
-            configuration: configuration,
-            optionValues: optionValues,
-            now: now
-        ) {
-            store[Key.systemDefault] = patched
-        }
-        store[Key.spaces] = try patched(
-            containerMap: store[Key.spaces],
-            at: Key.spaces,
-            configuration: configuration,
-            optionValues: optionValues,
-            now: now
         )
-        store[Key.displays] = try patched(
-            containerMap: store[Key.displays],
-            at: Key.displays,
-            configuration: configuration,
-            optionValues: optionValues,
-            now: now
-        )
+        if store[Key.systemDefault] != nil {
+            result[Key.systemDefault] = try patchedContainer(
+                store[Key.systemDefault],
+                at: Key.systemDefault,
+                configuration: configuration,
+                optionValues: optionValues,
+                now: now
+            )
+        }
+        if store[Key.spaces] != nil {
+            result[Key.spaces] = try patchedSpaceMap(
+                store[Key.spaces],
+                at: Key.spaces,
+                configuration: configuration,
+                optionValues: optionValues,
+                now: now
+            )
+        }
+        if store[Key.displays] != nil {
+            result[Key.displays] = try patchedContainerMap(
+                store[Key.displays],
+                at: Key.displays,
+                configuration: configuration,
+                optionValues: optionValues,
+                now: now
+            )
+        }
+        store = result
     }
 
     /// The wallpaper of the global container, as it is written in the store.
@@ -264,32 +255,27 @@ struct WallpaperStore {
         return Self.wallpaperURL(inContainer: container)
     }
 
-    /// The wallpaper of a container.
+    /// The wallpaper of the slot that macOS uses for a container.
     private static func wallpaperURL(inContainer container: [String: Any]) -> URL? {
-        for name in Slot.desktopPicture {
-            guard let slot = container[name] as? [String: Any] else { continue }
-            if let url = wallpaperURL(inSlot: slot) { return url }
-        }
-        return nil
+        guard let name = desktopSlotName(in: container),
+              let slot = container[name] as? [String: Any]
+        else { return nil }
+        return wallpaperURL(inSlot: slot)
     }
 
     /// Whether every container of the store holds the wallpaper.
     ///
-    /// The global container has to hold the wallpaper and every container
-    /// that has a slot of the desktop picture has to hold it too: a Space
+    /// The global container has to hold the wallpaper and every other
+    /// container has to hold it in the slot that macOS uses for it: a Space
     /// that keeps its old wallpaper is a Space the wallpaper did not reach.
     func holdsWallpaper(_ imageURL: URL, in store: [String: Any]) -> Bool {
         let expected = imageURL.standardizedFileURL.path
         guard let global = store[Key.globalContainer] as? [String: Any],
-              let globalURL = Self.wallpaperURL(inContainer: global),
-              globalURL.standardizedFileURL.path == expected
+              Self.containerHolds(global, wallpaperPath: expected),
+              let containers = containers(in: store)
         else { return false }
-        for entry in containers(in: store) {
-            for name in Slot.desktopPicture {
-                guard let slot = entry.container[name] as? [String: Any] else { continue }
-                guard let url = Self.wallpaperURL(inSlot: slot),
-                      url.standardizedFileURL.path == expected else { return false }
-            }
+        for container in containers {
+            guard Self.containerHolds(container, wallpaperPath: expected) else { return false }
         }
         return true
     }
@@ -300,173 +286,230 @@ struct WallpaperStore {
         return holdsWallpaper(imageURL, in: store)
     }
 
-    /// The paths of the containers that hold a wallpaper the app cannot write.
-    ///
-    /// The app writes the slots of the desktop picture. The wallpaper of a
-    /// container that holds its wallpaper in another slot stays the old one,
-    /// so the wallpaper does not reach that Space. The app says so instead
-    /// of claiming that the wallpaper is on every Space.
-    func unwritableWallpaperPaths(in store: [String: Any]) -> [String] {
-        containers(in: store).compactMap { entry in
-            guard let name = Self.unwritableSlot(in: entry.container) else { return nil }
-            return "\(entry.path).\(name)"
-        }
+    /// Whether a container holds the wallpaper in the slot macOS uses.
+    private static func containerHolds(_ container: [String: Any], wallpaperPath: String) -> Bool {
+        guard let name = desktopSlotName(in: container),
+              let slot = container[name] as? [String: Any],
+              let url = wallpaperURL(inSlot: slot)
+        else { return false }
+        return url.standardizedFileURL.path == wallpaperPath
     }
 
-    /// Every container of the store with its path.
+    /// The slot that macOS uses for the desktop picture of a container.
     ///
-    /// The containers are the ones the patch writes: the global one, the
-    /// system default, every Space and every Display.
-    private func containers(in store: [String: Any]) -> [(path: String, container: [String: Any])] {
-        var result: [(path: String, container: [String: Any])] = []
-        for key in [Key.globalContainer, Key.systemDefault] {
-            guard let container = store[key] as? [String: Any] else { continue }
-            result.append((path: key, container: container))
+    /// A `linked` container uses `Linked`; every other container uses
+    /// `Desktop`. The presence of `Desktop` is enough when the type is
+    /// missing, because a store of an older macOS version can lack it.
+    private static func desktopSlotName(in container: [String: Any]) -> String? {
+        if container[Key.type] as? String == "linked" { return Slot.linked }
+        if container[Key.type] != nil || container[Slot.desktop] != nil { return Slot.desktop }
+        return nil
+    }
+
+    /// Every container of the store except the global one.
+    ///
+    /// The containers are the ones the patch writes: the system default, the
+    /// `Default` container of every Space, every Display of a Space and every
+    /// top-level Display. A result of `nil` means that a Space record is not
+    /// understood, so the store cannot be verified.
+    private func containers(in store: [String: Any]) -> [[String: Any]]? {
+        var result: [[String: Any]] = []
+        if let systemDefault = store[Key.systemDefault] as? [String: Any] {
+            result.append(systemDefault)
         }
-        for key in [Key.spaces, Key.displays] {
-            guard let map = store[key] as? [String: Any] else { continue }
-            for (id, value) in map {
-                guard let container = value as? [String: Any] else { continue }
-                result.append((path: "\(key).\(id)", container: container))
-                guard let displays = container[Key.displays] as? [String: Any] else { continue }
-                for (displayID, display) in displays {
-                    guard let displayContainer = display as? [String: Any] else { continue }
-                    result.append((
-                        path: "\(key).\(id).\(Key.displays).\(displayID)",
-                        container: displayContainer
-                    ))
+        if let displays = store[Key.displays] as? [String: Any] {
+            result.append(contentsOf: Self.containers(inMap: displays))
+        }
+        if let spaces = store[Key.spaces] as? [String: Any] {
+            for value in spaces.values {
+                guard let record = value as? [String: Any] else { return nil }
+                var holdsContainer = false
+                if let container = record[Key.spaceDefault] as? [String: Any] {
+                    result.append(container)
+                    holdsContainer = true
                 }
+                if let displays = record[Key.displays] as? [String: Any] {
+                    result.append(contentsOf: Self.containers(inMap: displays))
+                    holdsContainer = true
+                }
+                if Self.desktopSlotName(in: record) != nil {
+                    result.append(record)
+                    holdsContainer = true
+                }
+                guard holdsContainer else { return nil }
             }
         }
         return result
     }
 
-    /// The slot of a container that holds a wallpaper the app does not write.
-    ///
-    /// The idle slot holds the wallpaper of the idle screen, so it is left
-    /// alone and never counts.
-    private static func unwritableSlot(in container: [String: Any]) -> String? {
-        for name in container.keys.sorted() {
-            guard name != Slot.idle, !Slot.desktopPicture.contains(name) else { continue }
-            guard let slot = container[name] as? [String: Any] else { continue }
-            if wallpaperURL(inSlot: slot) != nil { return name }
-        }
-        return nil
+    private static func containers(inMap map: [String: Any]) -> [[String: Any]] {
+        map.values.compactMap { $0 as? [String: Any] }
     }
 
     // MARK: - The shape of the store
 
-    /// A container holds the wallpaper in one of its slots and can hold a
-    /// container per display.
+    /// A container holds the wallpaper in the slot that its `Type` names.
     ///
-    /// The result is `nil` when the container holds no wallpaper, so it is
-    /// skipped.
-    private func patched(
-        container: Any?,
+    /// The slot is written from scratch, so stale keys of its content and the
+    /// shuffle of macOS are reset.
+    private func patchedContainer(
+        _ value: Any?,
         at path: String,
         configuration: Data,
         optionValues: Data,
         now: Date
-    ) throws -> [String: Any]? {
-        guard let container = container as? [String: Any] else {
+    ) throws -> [String: Any] {
+        guard let container = value as? [String: Any] else {
             throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a container")
         }
 
         var result = container
-        var holdsWallpaper = false
+        let slot = Self.slot(configuration: configuration, optionValues: optionValues, now: now)
+        if container[Key.type] as? String == "linked" {
+            // A linked container uses `Linked`. A `Desktop` slot that is left
+            // over is stale and would win over the new slot.
+            result[Slot.linked] = slot
+            result.removeValue(forKey: Slot.desktop)
+        } else if container[Key.type] != nil || container[Slot.desktop] != nil {
+            // An individual container uses `Desktop`. A stray `Linked` slot
+            // is left alone, because macOS does not read it.
+            result[Slot.desktop] = slot
+        } else {
+            throw WallpaperStoreError.unexpectedShape(
+                reason: "\(path) has neither a type nor a desktop slot"
+            )
+        }
+        return result
+    }
 
-        for name in Slot.desktopPicture {
-            guard let value = result[name] else { continue }
-            guard let slot = value as? [String: Any] else {
-                throw WallpaperStoreError.unexpectedShape(reason: "\(path).\(name) is not a wallpaper slot")
+    /// A map of containers, keyed by the id of a Space or a Display.
+    private func patchedContainerMap(
+        _ value: Any?,
+        at path: String,
+        configuration: Data,
+        optionValues: Data,
+        now: Date
+    ) throws -> [String: Any] {
+        guard let map = value as? [String: Any] else {
+            throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a map of containers")
+        }
+
+        var result = map
+        for (id, value) in map {
+            result[id] = try patchedContainer(
+                value,
+                at: "\(path).\(id)",
+                configuration: configuration,
+                optionValues: optionValues,
+                now: now
+            )
+        }
+        return result
+    }
+
+    /// A map of Space records, keyed by the id of the Space.
+    private func patchedSpaceMap(
+        _ value: Any?,
+        at path: String,
+        configuration: Data,
+        optionValues: Data,
+        now: Date
+    ) throws -> [String: Any] {
+        guard let map = value as? [String: Any] else {
+            throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a map of Spaces")
+        }
+
+        var result = map
+        for (id, value) in map {
+            guard let record = value as? [String: Any] else {
+                throw WallpaperStoreError.unexpectedShape(reason: "\(path).\(id) is not a Space")
             }
-            result[name] = try patched(slot: slot, configuration: configuration, optionValues: optionValues, now: now)
-            holdsWallpaper = true
+            result[id] = try patchedSpace(
+                record,
+                at: "\(path).\(id)",
+                configuration: configuration,
+                optionValues: optionValues,
+                now: now
+            )
         }
+        return result
+    }
 
-        // shortcut: the idle slot holds the wallpaper of the idle screen, so
-        // it is never touched. Its option values carry a colour block that
-        // the wallpaper of the desktop picture does not have.
-        if let value = result[Slot.idle], !(value is [String: Any]) {
-            throw WallpaperStoreError.unexpectedShape(reason: "\(path).\(Slot.idle) is not a wallpaper slot")
+    /// A Space record.
+    ///
+    /// The wallpaper of the Space sits in its `Default` container and in the
+    /// container of every Display of the Space. A record that names a
+    /// wallpaper slot of its own is patched as a container as well. A record
+    /// that has neither stops the write, because its wallpaper would not be
+    /// reached.
+    private func patchedSpace(
+        _ record: [String: Any],
+        at path: String,
+        configuration: Data,
+        optionValues: Data,
+        now: Date
+    ) throws -> [String: Any] {
+        var result = record
+        var holdsContainer = false
+        if let value = record[Key.spaceDefault] {
+            result[Key.spaceDefault] = try patchedContainer(
+                value,
+                at: "\(path).\(Key.spaceDefault)",
+                configuration: configuration,
+                optionValues: optionValues,
+                now: now
+            )
+            holdsContainer = true
         }
-
-        if let value = result[Key.displays] {
-            result[Key.displays] = try patched(
-                containerMap: value,
+        if let value = record[Key.displays] {
+            result[Key.displays] = try patchedContainerMap(
+                value,
                 at: "\(path).\(Key.displays)",
                 configuration: configuration,
                 optionValues: optionValues,
                 now: now
             )
-            holdsWallpaper = true
+            holdsContainer = true
         }
-
-        guard holdsWallpaper else {
-            // A container that carries a type is understood. When it holds
-            // no wallpaper slot, it holds no wallpaper, so it is skipped. A
-            // container with neither a type nor a known key is not
-            // understood, so the write stops.
-            let understood = result["Type"] is String || Slot.known.contains { result[$0] != nil }
-            guard understood else {
-                throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a container that is understood")
-            }
-            return nil
-        }
-        return result
-    }
-
-    /// A map of containers, keyed by the id of the Space or the Display.
-    private func patched(
-        containerMap: Any?,
-        at path: String,
-        configuration: Data,
-        optionValues: Data,
-        now: Date
-    ) throws -> [String: Any] {
-        guard let containerMap = containerMap as? [String: Any] else {
-            throw WallpaperStoreError.unexpectedShape(reason: "\(path) is not a map of containers")
-        }
-
-        var result = containerMap
-        for (id, value) in containerMap {
-            guard let patched = try patched(
-                container: value,
-                at: "\(path).\(id)",
+        if Self.desktopSlotName(in: record) != nil {
+            result = try patchedContainer(
+                result,
+                at: path,
                 configuration: configuration,
                 optionValues: optionValues,
                 now: now
-            ) else { continue }
-            result[id] = patched
+            )
+        } else if !holdsContainer {
+            throw WallpaperStoreError.unexpectedShape(
+                reason: "\(path) has no Default container, no Displays and no wallpaper slot"
+            )
         }
         return result
     }
 
-    /// The wallpaper of a slot.
-    private func patched(
-        slot: [String: Any],
+    /// A fresh wallpaper slot.
+    ///
+    /// The slot is built from scratch instead of copying an old one, so a
+    /// stale key of the old content is dropped and the shuffle of macOS is
+    /// reset.
+    private static func slot(
         configuration: Data,
         optionValues: Data,
         now: Date
-    ) throws -> [String: Any] {
-        guard let content = slot["Content"] as? [String: Any] else {
-            throw WallpaperStoreError.unexpectedShape(reason: "a wallpaper slot has no content")
-        }
-
-        var newContent = content
-        newContent["Choices"] = [[
-            "Provider": Self.imageChoiceProvider,
-            "Files": [Any](),
-            "Configuration": configuration,
-        ]]
-        newContent["EncodedOptionValues"] = optionValues
-
-        var result = slot
-        result["Content"] = newContent
-        // The wallpaper was set now, so the agent applies it again.
-        result["LastSet"] = now
-        result["LastUse"] = now
-        return result
+    ) -> [String: Any] {
+        [
+            "Content": [
+                "Choices": [[
+                    "Provider": imageChoiceProvider,
+                    "Files": [Any](),
+                    "Configuration": configuration,
+                ]],
+                "Shuffle": "$null",
+                "EncodedOptionValues": optionValues,
+            ],
+            "LastSet": now,
+            "LastUse": now,
+        ]
     }
 
     private static func wallpaperURL(inSlot slot: [String: Any]) -> URL? {

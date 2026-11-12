@@ -27,6 +27,11 @@ Settings.
 - The desktop flickers briefly while the agent restarts
 - The app writes the store, so it backs the store up once before the first
   write and refuses to write a store it does not understand
+- The app needs a running `WallpaperAgent`: it waits for one before the first
+  write, and a store whose shape it does not understand is left unwritten
+- A store the app wrote but could not verify is reported as a failure: the
+  store is written then, but the app could not prove that it holds the
+  wallpaper
 - The feature needs macOS 14 or newer, because macOS 13 has no such store
 - ADR 0001 keeps its decision about the native Swift application, but its
   claim that the Accessibility permission is necessary no longer holds

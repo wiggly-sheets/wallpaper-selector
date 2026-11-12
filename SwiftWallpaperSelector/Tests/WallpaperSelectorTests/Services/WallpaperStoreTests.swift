@@ -56,6 +56,16 @@ private enum StoreFixture {
         ]
     }
 
+    /// A `linked` container, with a stale `Desktop` slot that macOS does not
+    /// read.
+    static func linkedContainer(wallpaperPath: String = imagePath) -> [String: Any] {
+        [
+            "Type": "linked",
+            "Desktop": slot(path: wallpaperPath),
+            "Linked": slot(path: wallpaperPath),
+        ]
+    }
+
     static func store(spaces: [String: Any] = [:], displays: [String: Any] = [:]) -> [String: Any] {
         [
             "AllSpacesAndDisplays": container(),
@@ -195,7 +205,7 @@ final class WallpaperStoreTests: XCTestCase {
     }
 
     func testTheWallpaperOfASpaceIsUpdated() throws {
-        let space: [String: Any] = ["Default": StoreFixture.slot(path: StoreFixture.imagePath)]
+        let space: [String: Any] = ["Default": StoreFixture.container()]
         let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
 
@@ -203,16 +213,45 @@ final class WallpaperStoreTests: XCTestCase {
 
         let store = try WallpaperStore().read(at: url)
         let spaces = try XCTUnwrap(store["Spaces"] as? [String: Any])
-        let container = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
-        let configuration = try configuration(of: container, slotName: "Default")
+        let spaceRecord = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
+        let container = try XCTUnwrap(spaceRecord["Default"] as? [String: Any])
+        let configuration = try configuration(of: container)
         XCTAssertEqual(
             (configuration["url"] as? [String: String])?["relative"],
             imageURL.absoluteString
         )
     }
 
+    /// A Space record that carries a wallpaper slot of its own is patched as
+    /// a container as well, without dropping the containers it already has.
+    func testASpaceRecordWithItsOwnSlotAlsoPatchesItsDefaultContainer() throws {
+        let space: [String: Any] = [
+            "Type": "individual",
+            "Desktop": StoreFixture.slot(path: StoreFixture.imagePath),
+            "Default": StoreFixture.container(),
+        ]
+        let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let store = try WallpaperStore().read(at: url)
+        let spaces = try XCTUnwrap(store["Spaces"] as? [String: Any])
+        let record = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
+        for container in [
+            record,
+            try XCTUnwrap(record["Default"] as? [String: Any]),
+        ] {
+            let configuration = try configuration(of: container)
+            XCTAssertEqual(
+                (configuration["url"] as? [String: String])?["relative"],
+                imageURL.absoluteString
+            )
+        }
+    }
+
     func testTheWallpaperOfADisplayOfASpaceIsUpdated() throws {
-        let display: [String: Any] = ["Desktop": StoreFixture.slot(path: StoreFixture.imagePath)]
+        let display: [String: Any] = StoreFixture.container()
         let space: [String: Any] = ["Displays": ["display-uuid": display]]
         let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
@@ -232,7 +271,7 @@ final class WallpaperStoreTests: XCTestCase {
     }
 
     func testTheWallpaperOfADisplayIsUpdated() throws {
-        let display: [String: Any] = ["Desktop": StoreFixture.slot(path: StoreFixture.imagePath)]
+        let display: [String: Any] = StoreFixture.container()
         let url = try writeFixture(StoreFixture.store(displays: ["display-uuid": display]))
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
 
@@ -250,8 +289,8 @@ final class WallpaperStoreTests: XCTestCase {
 
     /// A container whose keys make no sense stops the write.
     func testAContainerThatIsNotUnderstoodStopsTheWrite() throws {
-        let space: [String: Any] = ["Something": "else"]
-        let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
+        let display: [String: Any] = ["Something": "else"]
+        let url = try writeFixture(StoreFixture.store(displays: ["display-uuid": display]))
         let before = try Data(contentsOf: url)
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
 
@@ -263,33 +302,107 @@ final class WallpaperStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), before)
     }
 
-    /// A container that holds no wallpaper is skipped, so a Space without a
-    /// wallpaper does not stop the write.
-    func testAContainerThatHoldsNoWallpaperIsSkipped() throws {
-        let space: [String: Any] = ["Type": "individual"]
+    /// A Space record that this app does not understand stops the write, so
+    /// the file keeps the content it had.
+    func testAnUnknownSpaceRecordStopsTheWrite() throws {
+        let space: [String: Any] = ["Something": "else"]
         let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
+        let before = try Data(contentsOf: url)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        XCTAssertThrowsError(try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)) { error in
+            guard case WallpaperStoreError.unexpectedShape = error else {
+                return XCTFail("The write should stop on a Space that is not understood: \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: url), before)
+    }
+
+    /// A Space record with an `Idle` slot of its own has no wallpaper slot
+    /// that macOS reads, so it is not understood either.
+    func testASpaceRecordWithOnlyAnIdleSlotStopsTheWrite() throws {
+        let space: [String: Any] = ["Idle": StoreFixture.slot(path: StoreFixture.idlePath)]
+        let url = try writeFixture(StoreFixture.store(spaces: ["space-uuid": space]))
+        let before = try Data(contentsOf: url)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        XCTAssertThrowsError(try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)) { error in
+            guard case WallpaperStoreError.unexpectedShape = error else {
+                return XCTFail("An idle-only Space has no wallpaper slot: \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: url), before)
+    }
+
+    /// The global container is the one macOS always reads, so a store
+    /// without it is not understood.
+    func testAStoreWithoutTheGlobalContainerStopsTheWrite() throws {
+        var store = StoreFixture.store()
+        store.removeValue(forKey: "AllSpacesAndDisplays")
+        let url = try writeFixture(store)
+        let before = try Data(contentsOf: url)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        XCTAssertThrowsError(try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)) { error in
+            guard case WallpaperStoreError.unexpectedShape = error else {
+                return XCTFail("The global container is required: \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: url), before)
+    }
+
+    /// The other root containers are optional, and a key that is absent stays
+    /// absent.
+    func testAStoreWithoutTheOptionalRootContainersIsWrittenAndVerified() throws {
+        let store: [String: Any] = ["AllSpacesAndDisplays": StoreFixture.container()]
+        let url = try writeFixture(store)
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
 
         try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
 
-        let store = try WallpaperStore().read(at: url)
-        let spaces = try XCTUnwrap(store["Spaces"] as? [String: Any])
-        let container = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
-        XCTAssertEqual(container["Type"] as? String, "individual")
-        XCTAssertNil(container["Desktop"], "The container without a wallpaper is not written")
-        let global = try XCTUnwrap(store["AllSpacesAndDisplays"] as? [String: Any])
+        let after = try WallpaperStore().read(at: url)
+        XCTAssertEqual(Set(after.keys), ["AllSpacesAndDisplays"])
+        let global = try XCTUnwrap(after["AllSpacesAndDisplays"] as? [String: Any])
         let configuration = try configuration(of: global)
         XCTAssertEqual(
             (configuration["url"] as? [String: String])?["relative"],
             imageURL.absoluteString
         )
+        XCTAssertTrue(WallpaperStore().holdsWallpaper(imageURL, inStoreAt: url))
+    }
+
+    /// A root container that is there but is not a map stops the write.
+    func testANonDictionaryDisplayRootStopsTheWrite() throws {
+        var store = StoreFixture.store()
+        store["Displays"] = "not a map"
+        let url = try writeFixture(store)
+        let before = try Data(contentsOf: url)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        XCTAssertThrowsError(try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)) { error in
+            guard case WallpaperStoreError.unexpectedShape = error else {
+                return XCTFail("A Displays root that is no map is not understood: \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: url), before)
+    }
+
+    /// A throw must not leave the dictionary of the caller half patched.
+    func testAFailedWriteLeavesTheStoreInMemoryUnchanged() throws {
+        var store = StoreFixture.store(spaces: ["space-uuid": ["Something": "else"]])
+        let before = store as NSDictionary
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        XCTAssertThrowsError(try WallpaperStore().setWallpaper(imageURL, in: &store))
+
+        XCTAssertEqual(store as NSDictionary, before)
     }
 
     /// The verification has to cover every container of the store and not
     /// only the global one: a Space that keeps its old wallpaper is a Space
     /// the wallpaper did not reach.
     func testTheVerificationChecksEveryContainerAndNotOnlyTheGlobalOne() throws {
-        let space: [String: Any] = ["Default": StoreFixture.slot(path: StoreFixture.imagePath)]
+        let space: [String: Any] = ["Default": StoreFixture.container()]
         var store = StoreFixture.store(spaces: ["space-uuid": space])
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
         // The global container holds the new wallpaper, the Space holds the
@@ -300,6 +413,25 @@ final class WallpaperStoreTests: XCTestCase {
         XCTAssertFalse(
             WallpaperStore().holdsWallpaper(imageURL, inStoreAt: url),
             "A Space that keeps its old wallpaper is a Space the wallpaper did not reach"
+        )
+    }
+
+    /// The display of a Space is checked as well: a display that keeps the
+    /// old wallpaper is a container the wallpaper did not reach.
+    func testTheVerificationChecksTheDisplayOfASpace() throws {
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+        let space: [String: Any] = [
+            "Displays": ["display-uuid": StoreFixture.container()],
+        ]
+        var store = StoreFixture.store(spaces: ["space-uuid": space])
+        // Every other container holds the new wallpaper.
+        store["AllSpacesAndDisplays"] = StoreFixture.container(wallpaperPath: imageURL.path)
+        store["SystemDefault"] = StoreFixture.container(wallpaperPath: imageURL.path)
+        let url = try writeFixture(store)
+
+        XCTAssertFalse(
+            WallpaperStore().holdsWallpaper(imageURL, inStoreAt: url),
+            "A display of a Space that keeps its old wallpaper is a container the wallpaper did not reach"
         )
     }
 
@@ -358,26 +490,33 @@ final class WallpaperStoreTests: XCTestCase {
         XCTAssertEqual(files, ["Index.plist"])
     }
 
-    func testAnUnknownKeyOfTheStoreStopsTheWrite() throws {
+    /// A root key that this app does not know is preserved, so a store of a
+    /// newer macOS version is not changed beyond the wallpaper.
+    func testAnUnknownKeyOfTheStoreIsPreserved() throws {
+        let unknown: [String: Any] = ["Type": "individual"]
         var store = StoreFixture.store()
-        store["SomethingNew"] = ["Type": "individual"]
+        store["SomethingNew"] = unknown
         let url = try writeFixture(store)
-        let before = try Data(contentsOf: url)
         let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
 
-        XCTAssertThrowsError(try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)) { error in
-            guard case WallpaperStoreError.unexpectedShape = error else {
-                return XCTFail("The write should stop on a shape that is not understood: \(error)")
-            }
-        }
-        XCTAssertEqual(try Data(contentsOf: url), before)
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let after = try WallpaperStore().read(at: url)
+        XCTAssertEqual(after["SomethingNew"] as? NSDictionary, unknown as NSDictionary)
+        let global = try XCTUnwrap(after["AllSpacesAndDisplays"] as? [String: Any])
+        let configuration = try configuration(of: global)
+        XCTAssertEqual(
+            (configuration["url"] as? [String: String])?["relative"],
+            imageURL.absoluteString
+        )
     }
 
-    func testTheSlotIsFoundByItsPresenceAndNotByTheType() throws {
-        // The container holds the type `individual` and the slot `Linked`.
-        // The slot that is there is the one that is written.
+    /// A linked container writes the `Linked` slot that macOS reads and drops
+    /// the `Desktop` slot that was left over.
+    func testALinkedContainerGetsALinkedSlotAndLosesItsStaleDesktop() throws {
         var container = StoreFixture.container()
-        container["Linked"] = container.removeValue(forKey: "Desktop")
+        container["Type"] = "linked"
+        container["Linked"] = container["Desktop"]
         var store = StoreFixture.store()
         store["AllSpacesAndDisplays"] = container
         let url = try writeFixture(store)
@@ -387,12 +526,110 @@ final class WallpaperStoreTests: XCTestCase {
 
         let after = try WallpaperStore().read(at: url)
         let patched = try XCTUnwrap(after["AllSpacesAndDisplays"] as? [String: Any])
-        XCTAssertNil(patched["Desktop"])
+        XCTAssertNil(patched["Desktop"], "The stale desktop slot has to be removed")
         let configuration = try configuration(of: patched, slotName: "Linked")
         XCTAssertEqual(
             (configuration["url"] as? [String: String])?["relative"],
             imageURL.absoluteString
         )
+    }
+
+    /// Every container that is linked writes `Linked` and loses its stale
+    /// `Desktop`, also when it sits in `SystemDefault`, in the `Default` of a
+    /// Space or in a Display of a Space.
+    func testALinkedSystemDefaultSpaceDefaultAndSpaceDisplayGetALinkedSlot() throws {
+        let space: [String: Any] = [
+            "Default": StoreFixture.linkedContainer(),
+            "Displays": ["display-uuid": StoreFixture.linkedContainer()],
+        ]
+        var store = StoreFixture.store(spaces: ["space-uuid": space])
+        store["SystemDefault"] = StoreFixture.linkedContainer()
+        let url = try writeFixture(store)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let after = try WallpaperStore().read(at: url)
+        let systemDefault = try XCTUnwrap(after["SystemDefault"] as? [String: Any])
+        let spaces = try XCTUnwrap(after["Spaces"] as? [String: Any])
+        let record = try XCTUnwrap(spaces["space-uuid"] as? [String: Any])
+        let spaceDefault = try XCTUnwrap(record["Default"] as? [String: Any])
+        let displays = try XCTUnwrap(record["Displays"] as? [String: Any])
+        let display = try XCTUnwrap(displays["display-uuid"] as? [String: Any])
+        for container in [systemDefault, spaceDefault, display] {
+            XCTAssertNil(container["Desktop"], "The stale desktop slot has to be removed")
+            let configuration = try configuration(of: container, slotName: "Linked")
+            XCTAssertEqual(
+                (configuration["url"] as? [String: String])?["relative"],
+                imageURL.absoluteString
+            )
+        }
+    }
+
+    /// An individual container writes the `Desktop` slot and leaves a stray
+    /// `Linked` slot alone, because macOS does not read it.
+    func testAnIndividualContainerKeepsAStrayLinkedSlot() throws {
+        var container = StoreFixture.container()
+        container["Linked"] = StoreFixture.slot(path: StoreFixture.imagePath)
+        let linkedBefore = container["Linked"] as? NSDictionary
+        var store = StoreFixture.store()
+        store["AllSpacesAndDisplays"] = container
+        let url = try writeFixture(store)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let after = try WallpaperStore().read(at: url)
+        let patched = try XCTUnwrap(after["AllSpacesAndDisplays"] as? [String: Any])
+        let configuration = try configuration(of: patched)
+        XCTAssertEqual(
+            (configuration["url"] as? [String: String])?["relative"],
+            imageURL.absoluteString
+        )
+        XCTAssertEqual(patched["Linked"] as? NSDictionary, linkedBefore)
+    }
+
+    /// A container whose type is not `linked` still uses the `Desktop` slot.
+    /// A container with no wallpaper yet is not skipped.
+    func testAContainerWithTheTypeIdleAndNoDesktopSlotGetsADesktopSlot() throws {
+        var store = StoreFixture.store()
+        store["AllSpacesAndDisplays"] = ["Type": "idle"] as [String: Any]
+        let url = try writeFixture(store)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let after = try WallpaperStore().read(at: url)
+        let patched = try XCTUnwrap(after["AllSpacesAndDisplays"] as? [String: Any])
+        XCTAssertEqual(patched["Type"] as? String, "idle")
+        let configuration = try configuration(of: patched)
+        XCTAssertEqual(
+            (configuration["url"] as? [String: String])?["relative"],
+            imageURL.absoluteString
+        )
+        XCTAssertTrue(WallpaperStore().holdsWallpaper(imageURL, inStoreAt: url))
+    }
+
+    /// The slot is written from scratch, so the shuffle of macOS is reset.
+    func testASlotWithAShuffleIsWrittenWithNoShuffle() throws {
+        var container = StoreFixture.container()
+        var slot = try XCTUnwrap(container["Desktop"] as? [String: Any])
+        var content = try XCTUnwrap(slot["Content"] as? [String: Any])
+        content["Shuffle"] = "some-shuffle"
+        slot["Content"] = content
+        container["Desktop"] = slot
+        var store = StoreFixture.store()
+        store["AllSpacesAndDisplays"] = container
+        let url = try writeFixture(store)
+        let imageURL = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpaper(imageURL, inStoreAt: url)
+
+        let after = try WallpaperStore().read(at: url)
+        let patched = try XCTUnwrap(after["AllSpacesAndDisplays"] as? [String: Any])
+        let patchedSlot = try XCTUnwrap(patched["Desktop"] as? [String: Any])
+        let patchedContent = try XCTUnwrap(patchedSlot["Content"] as? [String: Any])
+        XCTAssertEqual(patchedContent["Shuffle"] as? String, "$null")
     }
 
     func testAMissingStoreIsReported() {
