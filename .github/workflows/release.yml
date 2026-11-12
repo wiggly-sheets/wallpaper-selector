@@ -29,6 +29,11 @@ jobs:
         run: |
           VERSION="${VERSION#v}"
           make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
+      # The checksum is verified here, so a checksum file that names another
+      # file fails at release time and not in the download of a user.
+      - name: Verify the release artifacts
+        run: |
+          cd release && shasum -a 256 -c *.sha256
       # macOS gives an app the current appearance only when its executable
       # records an SDK of 26.0 or newer. The block is a gate: a release that
       # records an older SDK must not be published.
