@@ -343,22 +343,31 @@ Useful commands:
 
 ```bash
 make app                          # dist/Wallpaper Selector.app
+make verify                       # architecture, SDK, version and signature
 make install                      # ~/Applications/Wallpaper Selector.app
 make release-artifacts VERSION=1.0.0
-make release VERSION=1.0.0        # build the artifacts and tag v1.0.0 locally
+make release-notes VERSION=1.0.0  # preview the changelog section
+make release VERSION=1.0.0        # bump, test, build, verify, commit and tag
 ```
 
 `make release-artifacts` creates a versioned DMG and `.sha256` checksum under
-`release/`. A local `make dmg` and the DMG of the release workflow end up the
-same: a read-only disk image with the Finder window layout. The local recipe
-only moves the compression out of `create-dmg` and into the `hdiutil convert`
-of the Makefile, because `--skip-finalize` leaves a writable disk image
-behind. The layout is driven through AppleScript, so a local `make dmg` needs
-a GUI session; without one it fails with `Failed running AppleScript`.
+`release/`, then verifies the checksum. A local `make dmg` and the DMG of the
+release workflow end up the same: a read-only disk image with the Finder window
+layout. The local recipe only moves the compression out of `create-dmg` and
+into the `hdiutil convert` of the Makefile, because `--skip-finalize` leaves a
+writable disk image behind. The layout is driven through AppleScript, so a
+local `make dmg` needs a GUI session; without one it fails with `Failed running
+AppleScript`.
 
-`make release VERSION=x.y.z` builds the same artifacts, creates the annotated
-tag `v<x.y.z>` locally and prints the command that pushes it. It never pushes
-by itself.
+`make test` runs the changelog check before the SwiftPM suite. The changelog
+uses one shape: an `[Unreleased]` section with `Added`, `Changed`,
+`Deprecated`, `Removed`, `Fixed` or `Security` headings, then version sections
+headed `## [x.y.z] - YYYY-MM-DD`.
+
+`make release VERSION=x.y.z` moves `[Unreleased]` to that version, runs the
+tests, builds and verifies the artifacts, commits the changelog bump, creates
+the annotated tag `v<x.y.z>` and prints the commands that push the commit and
+the tag. It never pushes by itself.
 
 ## Privacy
 

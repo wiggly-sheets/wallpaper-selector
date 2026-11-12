@@ -6,20 +6,29 @@ on:
 
 jobs:
   test:
-    runs-on: macos-latest
+    name: Test and package
+    runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
       - name: Test
         run: make test
-      - name: Build release app
-        run: make app CONFIGURATION=release
+
+      - name: Build the app bundle
+        env:
+          VERSION: 0.0.0-ci
+          BUILD_NUMBER: 0
+        run: make app CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER"
+
       # macOS gives an app the current appearance only when its executable
-      # records an SDK of 26.0 or newer. SwiftPM records the deployment target
-      # there by default, so the package names the SDK version to the linker.
-      # This step checks the executable that a real build produces.
-      - name: Check the recorded SDK
-        run: |
-          vtool -show-build "dist/Wallpaper Selector.app/Contents/MacOS/WallpaperSelector" | grep -q "sdk 27.2"
+      # records an SDK of 26.0 or newer. `make verify` checks that, the
+      # architecture, the bundle version and the signature.
+      - name: Verify the app bundle
+        env:
+          VERSION: 0.0.0-ci
+        run: make verify VERSION="$VERSION"
+
       # The DMG and the checksum are only built on a release tag, so a broken
       # create-dmg flag, a broken hdiutil convert or a wrong checksum name
       # would only be found at release time. This step runs the same recipe
@@ -35,7 +44,9 @@ jobs:
           BUILD_NUMBER: 0
         run: |
           brew install create-dmg
-          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" \
+            BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
+
       # The `hdiutil convert` branch of the DMG recipe only runs when
       # CREATE_DMG_FINALIZE_FLAGS is not empty. The step above passes an
       # empty value on purpose, so the branch would never run in CI.
@@ -46,13 +57,13 @@ jobs:
       # skips the Finder layout, so the recipe needs no GUI session here.
       # `--skip-finalize` alone does not skip it, it only leaves a writable
       # disk image behind, so the layout would still be driven.
-      # The `shasum -c` check is the other half of the gate: a checksum file
-      # that names another file fails here and not in the download of a user.
+      # `make release-artifacts` verifies the checksum it wrote.
       - name: Build release artifacts with the default finalize flags
         env:
           VERSION: 0.0.0-ci-convert
           BUILD_NUMBER: 1
         run: |
           brew install create-dmg
-          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS='--skip-finalize --skip-jenkins'
-          cd release && shasum -a 256 -c "WallpaperSelector-$VERSION.dmg.sha256"
+          make release-artifacts CONFIGURATION=release VERSION="$VERSION" \
+            BUILD_NUMBER="$BUILD_NUMBER" \
+            CREATE_DMG_FINALIZE_FLAGS='--skip-finalize --skip-jenkins'

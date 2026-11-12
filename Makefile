@@ -32,7 +32,8 @@ else
 RELEASE_VERSION :=
 endif
 
-.PHONY: help build test app install run dmg release-artifacts release clean
+.PHONY: help build test verify app install run dmg release-artifacts \
+	release-notes release clean
 
 .DEFAULT_GOAL := help
 
@@ -44,11 +45,13 @@ help:
 		'' \
 		'  help                  List every target (default).' \
 		'  build                 Build the Swift package in the development configuration.' \
-		'  test                  Run the SwiftPM test suite.' \
+		'  test                  Run the changelog check and the SwiftPM test suite.' \
+		'  verify                Check the bundle: architecture, SDK, version and signature.' \
 		'  app                   Build the app bundle into dist/Wallpaper Selector.app.' \
 		'  dmg                   Build the disk image release/WallpaperSelector-<version>.dmg.' \
-		'  release-artifacts     Build the disk image and the SHA-256 checksum file next to it.' \
-		'  release VERSION=x.y.z  Build the artifacts, tag v<x.y.z> locally, print the push command.' \
+		'  release-artifacts     Build the disk image and its checksum file, then verify the checksum.' \
+		'  release-notes VERSION=x.y.z  Print the changelog section of a version.' \
+		'  release VERSION=x.y.z  Bump the changelog, test, build, verify, commit and tag.' \
 		'  install               Copy the app bundle into ~/Applications.' \
 		'  run                   Install the app bundle and launch it.' \
 		'  clean                 Remove .build/, dist/ and release/.' \
@@ -62,10 +65,12 @@ help:
 		'  WallpaperSelector-<version>.dmg.sha256. The names must not change, because the' \
 		'  Homebrew tap matches the assets by name.' \
 		'  The checksum file holds one line per asset: the digest, two spaces, the bare file name.' \
-		'  The release notes come from the section of CHANGELOG.md for the version. A version' \
-		'  without a section fails the release.' \
+		'  CHANGELOG.md follows the shared shape: an [Unreleased] section with Added, Changed,' \
+		'  Deprecated, Removed, Fixed or Security headings. `make test` checks it.' \
 		'  `make release` refuses a dirty working tree and a version whose tag already exists.' \
-		'  It creates an annotated local tag, it prints the push command and it never pushes.' \
+		'  It moves [Unreleased] to the version, runs the tests, builds and verifies the' \
+		'  artifacts, commits the bump, creates the annotated tag and prints the push' \
+		'  commands. It never pushes.' \
 		'  Signing stays ad-hoc: identity "-", no certificate, no notarization.' \
 		'  create-dmg is needed for the dmg target: brew install create-dmg.'
 
@@ -77,7 +82,42 @@ build:
 ## test — the test suite
 
 test:
+	./scripts/changelog.sh check
 	swift test
+
+## verify — check the built bundle
+
+verify:
+	@test -d "$(APP_BUNDLE)" || { \
+		echo "error: $(APP_BUNDLE) is missing. Run make app first."; \
+		exit 1; \
+	}
+	@binary="$(APP_BUNDLE)/Contents/MacOS/$(PRODUCT_NAME)"; \
+	archs="$$(lipo -archs "$$binary")"; \
+	echo "Architectures: $$archs"; \
+	test "$$archs" = "arm64" || { \
+		echo "error: expected an arm64 binary, got $$archs."; \
+		exit 1; \
+	}
+	@binary="$(APP_BUNDLE)/Contents/MacOS/$(PRODUCT_NAME)"; \
+	sdk="$$(vtool -show-build "$$binary" | awk '$$1 == "sdk" { print $$2; exit }')"; \
+	echo "Recorded SDK: $${sdk:-none}"; \
+	if [ -z "$$sdk" ]; then \
+		echo "error: the binary records no SDK version."; \
+		exit 1; \
+	fi; \
+	awk -v sdk="$$sdk" 'BEGIN { exit !(sdk + 0 >= 26.0) }' || { \
+		echo "error: the binary records SDK $$sdk; Liquid Glass needs 26.0 or newer."; \
+		exit 1; \
+	}
+	@version="$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(APP_BUNDLE)/Contents/Info.plist")"; \
+	echo "Bundle version: $$version (expected $(VERSION))"; \
+	test "$$version" = "$(VERSION)" || { \
+		echo "error: the bundle reports $$version, but $(VERSION) was expected."; \
+		exit 1; \
+	}
+	codesign --verify --deep --strict "$(APP_BUNDLE)"
+	@echo "Verified $(APP_BUNDLE)."
 
 ## app — the bundle the product ships
 
@@ -118,9 +158,19 @@ dmg: app
 
 release-artifacts: dmg
 	cd "$(RELEASE_DIR)" && shasum -a 256 "$(notdir $(DMG))" > "$(notdir $(DMG)).sha256"
+	@cd "$(RELEASE_DIR)" && shasum -a 256 -c "$(notdir $(DMG)).sha256"
 	@echo "Wrote $(RELEASE_DIR)/$(notdir $(DMG)) and $(RELEASE_DIR)/$(notdir $(DMG)).sha256"
 
-## release — build the artifacts and tag them, without pushing
+## release-notes — print the changelog section of a version
+
+release-notes:
+	@if [ -z "$(strip $(RELEASE_VERSION))" ]; then \
+		echo "error: make release-notes needs a version, for example: make release-notes VERSION=1.2.3"; \
+		exit 1; \
+	fi
+	@./scripts/changelog.sh notes "$(RELEASE_VERSION)"
+
+## release — bump, test, build, verify, commit and tag, without pushing
 
 release:
 	@if [ -z "$(strip $(RELEASE_VERSION))" ]; then \
@@ -128,20 +178,7 @@ release:
 		echo "       make release VERSION=1.2.3"; \
 		exit 1; \
 	fi
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		echo "error: the working tree is dirty. Commit or stash your changes first."; \
-		git status --short; \
-		exit 1; \
-	fi
-	@if git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null; then \
-		echo "error: the tag v$(VERSION) already exists."; \
-		exit 1; \
-	fi
-	$(MAKE) release-artifacts VERSION=$(VERSION)
-	git tag -a "v$(VERSION)" -m "$(APP_NAME) $(VERSION)"
-	@echo ""
-	@echo "Tagged v$(VERSION). Push it with:"
-	@echo "  git push origin v$(VERSION)"
+	@APP_NAME="$(APP_NAME)" ./scripts/release.sh "$(RELEASE_VERSION)"
 
 ## clean — remove everything the build produces
 

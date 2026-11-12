@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The release notes now come from the section of this CHANGELOG for the released
   version. A stable version without a section fails the release.
+- The build interface gained `make verify` (architecture, recorded SDK, bundle
+  version and signature) and the changelog check in `make test`. `make release`
+  now moves `[Unreleased]` to the released version, runs the tests, builds and
+  verifies the artifacts, commits the changelog bump and creates the tag.
 
 ## [1.0.0] - 2026-08-10
 
@@ -29,5 +33,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   picking, rotating and organizing local wallpapers. The release publishes the
   disk image `WallpaperSelector-1.0.0.dmg` and the checksum file
   `WallpaperSelector-1.0.0.dmg.sha256` next to it.
-
-**Full Changelog**: https://github.com/wiggly-sheets/wallpaper-selector/commits/v1.0.0

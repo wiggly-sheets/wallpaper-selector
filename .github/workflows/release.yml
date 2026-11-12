@@ -5,45 +5,85 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
-    runs-on: macos-latest
+    name: Build and publish the release
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Write release notes
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the version
+        id: version
         env:
-          VERSION: ${{ github.ref_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          VERSION="${VERSION#v}"
-          ./scripts/release-notes.sh "${VERSION}" > release-notes.md
-      - name: Install DMG packager
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::the version \"$version\" is not valid"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: The tag must sit on the default branch
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::the tag ${GITHUB_REF_NAME} is not on origin/main; cut it from the default branch"
+            exit 1
+          fi
+
+      - name: Install the DMG packager
         run: brew install create-dmg
-      - name: Test
+
+      - name: Run the test suite
         run: make test
-      - name: Build release artifacts
+
+      - name: Build the release artifacts
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
+        run: make release-artifacts CONFIGURATION=release VERSION="$VERSION" \
+          BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
+
+      - name: Verify the built bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: make verify VERSION="$VERSION"
+
+      - name: Write the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${VERSION#v}"
-          make release-artifacts CONFIGURATION=release VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
-      # The checksum is verified here, so a checksum file that names another
-      # file fails at release time and not in the download of a user.
-      - name: Verify the release artifacts
-        run: |
-          cd release && shasum -a 256 -c *.sha256
-      # macOS gives an app the current appearance only when its executable
-      # records an SDK of 26.0 or newer. The block is a gate: a release that
-      # records an older SDK must not be published.
-      - name: Check the recorded SDK
-        run: |
-          vtool -show-build "dist/Wallpaper Selector.app/Contents/MacOS/WallpaperSelector" | grep -q "sdk 27.2"
-      - name: Publish GitHub release
+          set -euo pipefail
+          ./scripts/changelog.sh notes "$VERSION" > release-notes.md
+          {
+            echo ""
+            echo "## Checksums"
+            echo ""
+            echo '```'
+            cat release/*.sha256
+            echo '```'
+          } >> release-notes.md
+
+      - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
+          name: Wallpaper Selector ${{ steps.version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
           body_path: release-notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             release/*.dmg
             release/*.sha256
+          fail_on_unmatched_files: true
