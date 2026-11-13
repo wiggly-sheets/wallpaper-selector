@@ -25,12 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now moves `[Unreleased]` to the released version, runs the tests, builds and
   verifies the artifacts, commits the changelog bump and creates the tag.
 
-## [1.0.1-rc.1] - 2026-11-13
-
-### Added
-
-- Release pipeline trial.
-
 ## [1.0.0] - 2026-08-10
 
 ### Added
