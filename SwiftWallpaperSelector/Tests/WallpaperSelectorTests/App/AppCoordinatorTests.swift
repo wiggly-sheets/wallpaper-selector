@@ -236,8 +236,11 @@ final class AppCoordinatorTests: XCTestCase {
         coordinator.appState.updateSettings {
             $0.themes.append(Theme(id: "other", name: "Other", folderPaths: [directory.path]))
         }
-        // The re-application is scheduled on the next turn of the main actor.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        // A re-application is enqueued on the main actor right away; let the
+        // queued work run instead of guessing a time.
+        for _ in 0..<10 {
+            await Task.yield()
+        }
 
         XCTAssertTrue(
             wallpaperProvider.appliedURLs.isEmpty,
@@ -248,33 +251,7 @@ final class AppCoordinatorTests: XCTestCase {
 
     /// The wallpaper that is on the screen has to reach every Space as soon
     /// as the user turns the setting on. The user does not wait for the next
-    /// rotation.
-    func testSwitchingAllSpacesOnPutsTheCurrentWallpaperOnEverySpace() throws {
-        let context = try TestSettingsContext()
-        let settingsManager = context.makeSettingsManager()
-        let applier = RecordingAllSpacesApplier()
-        let directory = try makeWallpaperDirectory(in: context)
-        let wallpaper = try makeImage(named: "current.jpg", in: directory)
-        settingsManager.replace(WallpaperSettings(
-            folderPaths: [directory.path],
-            currentWallpaper: wallpaper.path
-        ))
-        let coordinator = makeCoordinator(
-            settingsManager: settingsManager,
-            applier: applier,
-            desktopImageURL: { wallpaper }
-        )
-        defer { _ = coordinator }
-
-        coordinator.appState.updateSettings { $0.allSpaces = true }
-
-        XCTAssertEqual(applier.appliedURLs, [wallpaper])
-    }
-
-    /// The wallpaper of the app is the one it applied last. The user can
-    /// change the wallpaper in the System Settings, and then the wallpaper
-    /// of the app is the old one. The wallpaper on the screen is the one
-    /// that reaches every Space.
+    /// rotation. The wallpaper on the screen wins over a stale setting.
     func testSwitchingAllSpacesOnUsesTheWallpaperOnTheScreen() throws {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
@@ -444,29 +421,26 @@ final class AppCoordinatorTests: XCTestCase {
 
     /// The app is an accessory app without a key window, so the screen with
     /// the key can be missing. The other screens still report their
-    /// wallpaper, so the wallpaper on the screen is found anyway.
-    func testTheWallpaperOfAnotherScreenIsUsedWhenNoScreenHasTheKey() throws {
+    /// wallpaper, so the wallpaper on the screen is found anyway. No screen
+    /// reports one: there is no wallpaper.
+    func testTheWallpaperOfAnyScreenIsFound() throws {
         let wallpaper = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/on-screen.jpg")
 
         let url = AppCoordinator.currentDesktopImageURL(screens: [
             FakeDesktopScreen(wallpaper: nil),
             FakeDesktopScreen(wallpaper: wallpaper),
         ])
-
         XCTAssertEqual(url, wallpaper, "The wallpaper of a screen has to be found")
+
+        XCTAssertNil(
+            AppCoordinator.currentDesktopImageURL(screens: [FakeDesktopScreen(wallpaper: nil)]),
+            "No screen reports a wallpaper"
+        )
     }
 
-    /// No screen reports a wallpaper: the wallpaper of the settings is the
-    /// fallback.
-    func testNoWallpaperIsFoundWhenNoScreenReportsOne() throws {
-        let url = AppCoordinator.currentDesktopImageURL(screens: [FakeDesktopScreen(wallpaper: nil)])
-
-        XCTAssertNil(url)
-    }
-
-    /// The appearance of the machine can change while the suite runs. Every
-    /// observer of the distributed centre receives the real notification, so
-    /// the coordinator of the test has to listen to another name.
+    /// The coordinator only reacts to the appearance through its monitor: the
+    /// monitor of the test listens to a name that nothing posts, so the real
+    /// notification of macOS must not reach the coordinator.
     func testTheRealAppearanceNotificationDoesNotReachTheCoordinator() async throws {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
@@ -475,17 +449,22 @@ final class AppCoordinatorTests: XCTestCase {
             applier: RecordingAllSpacesApplier()
         )
         defer { _ = coordinator }
+        let reported = expectation(description: "the test-scoped notification was delivered")
         var reportCount = 0
-        coordinator.appearanceMonitor.onSystemAppearanceChanged = { reportCount += 1 }
+        coordinator.appearanceMonitor.onSystemAppearanceChanged = {
+            reportCount += 1
+            reported.fulfill()
+        }
 
-        DistributedNotificationCenter.default().post(
-            name: AppearanceMonitor.appearanceNotificationName,
-            object: nil
-        )
-        // The notification is delivered right away, so a moment is enough.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        // The test-scoped notification is the control: it is posted after the
+        // real one, so its arrival proves that the real one was delivered
+        // first and did not reach the coordinator.
+        let center = DistributedNotificationCenter.default()
+        center.post(name: AppearanceMonitor.appearanceNotificationName, object: nil)
+        center.post(name: TestNotifications.appearanceChanged, object: nil)
+        await fulfillment(of: [reported], timeout: 10)
 
-        XCTAssertEqual(reportCount, 0, "The real notification must not disturb the test")
+        XCTAssertEqual(reportCount, 1, "Only the test-scoped notification may reach the coordinator")
     }
 
     /// The coordinator of a test.

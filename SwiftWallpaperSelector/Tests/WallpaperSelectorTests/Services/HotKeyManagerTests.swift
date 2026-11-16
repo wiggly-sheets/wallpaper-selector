@@ -41,7 +41,7 @@ final class HotKeyManagerTests: XCTestCase {
         XCTAssertTrue(reportedError?.contains("not a shortcut") == true)
     }
 
-    func testRegistrationWithoutShortcutsReportsNoError() throws {
+    func testRegisterWithoutShortcutsReportsSuccess() throws {
         let context = try TestSettingsContext()
         let manager = HotKeyManager(settingsManager: context.makeSettingsManager())
         var reportedError: String?

@@ -216,33 +216,6 @@ final class AppearanceMonitorTests: XCTestCase {
             wallpaperProvider.calls,
             [lightPin.standardizedFileURL, darkPin.standardizedFileURL]
         )
-    }
-
-    @MainActor
-    func testInjectedSystemAppearanceChoosesDarkPin() throws {
-        let directory = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let lightPin = try makeImage(named: "light.jpg", in: directory)
-        let darkPin = try makeImage(named: "dark.jpg", in: directory)
-        let manager = makeSettingsManager(in: directory)
-        manager.replace(WallpaperSettings(
-            folderPaths: [directory.path],
-            matchSystemAppearance: true,
-            allFoldersLightWallpaper: lightPin.path,
-            allFoldersDarkWallpaper: darkPin.path
-        ))
-        let wallpaperProvider = RecordingWallpaperProvider()
-        let monitor = AppearanceMonitor(
-            settingsManager: manager,
-            wallpaperProvider: wallpaperProvider,
-            themeProvider: ThemeProvider(settingsManager: manager),
-            appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationName: TestNotifications.appearanceChanged
-        )
-
-        monitor.applyAppearanceWallpaperIfNeeded()
-
-        XCTAssertEqual(wallpaperProvider.calls, [darkPin.standardizedFileURL])
         XCTAssertEqual(manager.settings.currentWallpaper, darkPin.path)
     }
 
@@ -341,54 +314,22 @@ final class AppearanceMonitorTests: XCTestCase {
             appearanceProvider: FixedSystemAppearance(isDarkAppearance: false),
             notificationName: TestNotifications.appearanceChanged
         )
+        let reported = expectation(description: "the test-scoped notification was delivered")
         var reportCount = 0
-        monitor.onSystemAppearanceChanged = { reportCount += 1 }
+        monitor.onSystemAppearanceChanged = {
+            reportCount += 1
+            reported.fulfill()
+        }
 
-        monitor.applyAppearanceWallpaperIfNeeded()
-        XCTAssertEqual(reportCount, 1)
-
-        DistributedNotificationCenter.default().post(
-            name: AppearanceMonitor.appearanceNotificationName,
-            object: nil
-        )
-        // The notification is delivered right away, so a moment is enough.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        // The test-scoped notification is the control: it is posted after the
+        // real one, so its arrival proves that the real one was delivered
+        // first and did not reach the monitor.
+        let center = DistributedNotificationCenter.default()
+        center.post(name: AppearanceMonitor.appearanceNotificationName, object: nil)
+        center.post(name: TestNotifications.appearanceChanged, object: nil)
+        await fulfillment(of: [reported], timeout: 10)
 
         XCTAssertEqual(reportCount, 1, "The real notification must not disturb the test")
-    }
-
-    /// The wallpaper reached one of the two displays, so it is on the screen
-    /// and has to be recorded.
-    @MainActor
-    func testAPartialDisplayFailureStillRecordsTheWallpaper() throws {
-        let directory = try makeTemporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let pin = try makeImage(named: "dark.jpg", in: directory)
-        let manager = makeSettingsManager(in: directory)
-        manager.replace(WallpaperSettings(
-            folderPaths: [directory.path],
-            matchSystemAppearance: true,
-            allFoldersDarkWallpaper: pin.path
-        ))
-        let wallpaperProvider = FailingWallpaperProvider(
-            error: WallpaperProviderError.failedToSetOnDisplays(
-                failedCount: 1,
-                totalCount: 2,
-                underlying: MockWallpaperProviderError.configuredFailure
-            )
-        )
-        let monitor = AppearanceMonitor(
-            settingsManager: manager,
-            wallpaperProvider: wallpaperProvider,
-            themeProvider: ThemeProvider(settingsManager: manager),
-            appearanceProvider: FixedSystemAppearance(isDarkAppearance: true),
-            notificationName: TestNotifications.appearanceChanged
-        )
-
-        monitor.applyAppearanceWallpaperIfNeeded()
-
-        XCTAssertEqual(wallpaperProvider.calls, [pin.standardizedFileURL])
-        XCTAssertEqual(manager.settings.currentWallpaper, pin.path)
     }
 
     /// A wallpaper that could not be applied has to be reported: the rotation

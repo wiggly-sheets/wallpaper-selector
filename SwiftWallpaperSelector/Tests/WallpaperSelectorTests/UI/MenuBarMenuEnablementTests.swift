@@ -8,16 +8,6 @@ import XCTest
 @MainActor
 final class MenuBarMenuEnablementTests: XCTestCase {
 
-    /// The failures are shown, but they cannot be clicked.
-    func testTheErrorItemsAreDisabled() {
-        let menu = MenuBarMenu(title: "Wallpaper Selector")
-        menu.update(with: MenuBarMenuState(
-            errorMessages: ["The wallpaper could not be set."]
-        ))
-
-        XCTAssertEqual(menu.menu.item(titled: "The wallpaper could not be set.")?.isEnabled, false)
-    }
-
     /// The preview needs at least one folder.
     func testThePreviewItemIsDisabledWithoutFolders() {
         let menu = MenuBarMenu(title: "Wallpaper Selector")

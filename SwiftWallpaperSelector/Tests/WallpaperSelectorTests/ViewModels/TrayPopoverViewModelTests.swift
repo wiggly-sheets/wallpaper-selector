@@ -40,10 +40,15 @@ final class TrayPopoverViewModelTests: XCTestCase {
     /// The popover must show the new value right away, not one change later.
     func testSettingsChangeIsVisibleWithoutWaitingForTheRunLoop() {
         XCTAssertFalse(viewModel.allSpaces)
+        XCTAssertFalse(viewModel.matchSystemAppearance)
 
-        appState.updateSettings { $0.allSpaces = true }
+        appState.updateSettings {
+            $0.allSpaces = true
+            $0.matchSystemAppearance = true
+        }
 
         XCTAssertTrue(viewModel.allSpaces)
+        XCTAssertTrue(viewModel.matchSystemAppearance)
     }
 
     /// The folders come from the effective folders, not from the raw settings.
@@ -59,16 +64,6 @@ final class TrayPopoverViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.folderPaths, [folder.standardizedFileURL.path])
     }
 
-    /// The popover has to know when the system picks the theme, so it can
-    /// disable the theme buttons.
-    func testTheAppearanceMatchingIsVisibleToThePopover() {
-        XCTAssertFalse(viewModel.matchSystemAppearance)
-
-        appState.updateSettings { $0.matchSystemAppearance = true }
-
-        XCTAssertTrue(viewModel.matchSystemAppearance)
-    }
-
     /// The rotation cannot run while the appearance is matched, so the
     /// interval picker would do nothing. The flag states the effect, so a
     /// view binds it without negating it.
@@ -80,28 +75,17 @@ final class TrayPopoverViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.isRotationControlDisabled)
     }
 
-    /// The theme actions can be used by hand at any time, so the rotation
-    /// interval must not grey them out.
-    func testTheThemeActionsAreEnabledWhileTheTimerIsOff() {
+    /// The theme actions can be used by hand at any time, but they need a
+    /// theme and the system picks the theme while the appearance is matched.
+    func testTheThemeActionsNeedAThemeAndAnUnmatchedAppearance() {
+        // No theme, timer off: the actions are disabled.
         XCTAssertEqual(viewModel.intervalMinutes, .off)
-        appState.updateSettings { $0.themes = [Theme(id: "theme", name: "Theme", folderPaths: [])] }
-
-        XCTAssertTrue(viewModel.isThemeActionEnabled)
-    }
-
-    /// A theme action without a theme changes nothing.
-    func testTheThemeActionsAreDisabledWithoutATheme() {
         XCTAssertFalse(viewModel.isThemeActionEnabled)
-    }
 
-    /// While the appearance is matched, the system picks the theme: a theme
-    /// action would show one theme and the wallpaper of another one.
-    func testTheThemeActionsAreDisabledWhileTheAppearanceIsMatched() {
         appState.updateSettings { $0.themes = [Theme(id: "theme", name: "Theme", folderPaths: [])] }
-        XCTAssertTrue(viewModel.isThemeActionEnabled)
+        XCTAssertTrue(viewModel.isThemeActionEnabled, "A theme action can be used while the timer is off")
 
         appState.updateSettings { $0.matchSystemAppearance = true }
-
         XCTAssertFalse(viewModel.isThemeActionEnabled)
     }
 

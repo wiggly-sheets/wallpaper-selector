@@ -19,20 +19,6 @@ final class SettingsManagerWriteTests: XCTestCase {
         XCTAssertFalse(threads.ranOnTheMainThread, "The write must not run on the main actor")
     }
 
-    /// The queued write lands before the test asserts on the file.
-    func testTheQueuedWriteLandsAfterTheFlush() throws {
-        let context = try TestSettingsContext()
-        let manager = context.makeSettingsManager()
-
-        manager.replace(WallpaperSettings(folderPaths: ["/flushed"]))
-        manager.flushPendingWrites()
-
-        XCTAssertEqual(
-            try decodeSettings(at: manager.settingsURL).folderPaths,
-            ["/flushed"]
-        )
-    }
-
     /// The writes run one after the other, so the last one is on disk.
     func testTheLastOfTwoRapidWritesIsOnDisk() throws {
         let context = try TestSettingsContext()

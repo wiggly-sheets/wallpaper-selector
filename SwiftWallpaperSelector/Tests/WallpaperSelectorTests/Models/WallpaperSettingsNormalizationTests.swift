@@ -4,9 +4,9 @@ import XCTest
 final class WallpaperSettingsNormalizationTests: XCTestCase {
 
     /// A theme without folders uses the global folder list as its scope, so a
-    /// pin inside a configured folder must survive the save.
+    /// pin inside a configured folder must survive the save and the load.
     @MainActor
-    func testAThemeWithoutFoldersKeepsAPinInsideAConfiguredFolder() throws {
+    func testAThemeWithoutFoldersKeepsAPinInsideAConfiguredFolderAcrossSaveAndLoad() throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         let theme = Theme(
@@ -24,28 +24,8 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
 
         XCTAssertEqual(manager.settings.themes[0].lightWallpaper, "/wallpapers/light.jpg")
         XCTAssertEqual(manager.settings.themes[0].darkWallpaper, "/wallpapers/dark.jpg")
-    }
 
-    /// The pin of a theme without folders has to survive the load of the
-    /// settings file too, so the user does not lose it on the next start.
-    @MainActor
-    func testAThemeWithoutFoldersKeepsItsPinOnEveryLoad() throws {
-        let context = try TestSettingsContext()
-        let manager = context.makeSettingsManager()
-        let theme = Theme(
-            id: "theme",
-            name: "Theme",
-            folderPaths: [],
-            lightWallpaper: "/wallpapers/light.jpg",
-            darkWallpaper: "/wallpapers/dark.jpg"
-        )
-        manager.replace(WallpaperSettings(
-            folderPaths: ["/wallpapers"],
-            themes: [theme],
-            activeThemeID: theme.id
-        ))
         manager.flushPendingWrites()
-
         let reloaded = context.makeSettingsManager().settings
 
         XCTAssertEqual(reloaded.themes[0].lightWallpaper, "/wallpapers/light.jpg")
@@ -118,24 +98,19 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
     /// A theme action without a theme cannot run, so the stored action has to
     /// become a wallpaper action: the rotation picker has to show a
     /// selection, otherwise the stored action stays invisible.
-    func testAThemeNextActionWithoutAThemeBecomesAShuffle() {
-        let normalized = WallpaperSettings(rotationAction: .themeNext).normalized()
+    func testEveryThemeActionWithoutAThemeBecomesAShuffle() {
+        for action in [RotationAction.themeNext, .themeShuffle, .themePrevious] {
+            let normalized = WallpaperSettings(rotationAction: action).normalized()
 
-        XCTAssertEqual(normalized.rotationAction, .shuffle)
-    }
-
-    /// The same rule for the other theme actions.
-    func testAThemeShuffleActionWithoutAThemeBecomesAShuffle() {
-        let normalized = WallpaperSettings(rotationAction: .themeShuffle).normalized()
-
-        XCTAssertEqual(normalized.rotationAction, .shuffle)
-    }
-
-    /// The same rule for the other theme actions.
-    func testAThemePreviousActionWithoutAThemeBecomesAShuffle() {
-        let normalized = WallpaperSettings(rotationAction: .themePrevious).normalized()
-
-        XCTAssertEqual(normalized.rotationAction, .shuffle)
+            XCTAssertEqual(
+                normalized.rotationAction,
+                .shuffle,
+                "\(action) cannot run without a theme"
+            )
+            // The rule must not fire twice: the action is a wallpaper action
+            // after the first pass.
+            XCTAssertEqual(normalized, normalized.normalized())
+        }
     }
 
     /// A theme action that has a theme to work with stays untouched.
@@ -149,14 +124,6 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
         ).normalized()
 
         XCTAssertEqual(normalized.rotationAction, .themeNext)
-    }
-
-    /// Normalizing the value a second time must not change it again: the
-    /// action is a wallpaper action now, so the rule does not fire twice.
-    func testNormalizingAThemeActionWithoutAThemeTwiceChangesNothing() {
-        let normalized = WallpaperSettings(rotationAction: .themeNext).normalized()
-
-        XCTAssertEqual(normalized, normalized.normalized())
     }
 
     /// The images of the scope are the ones a pin can be stored in: the
@@ -179,37 +146,14 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
         )
     }
 
-    /// An empty folder is the working directory, so it is not a folder.
+    /// An empty folder is the working directory, so it is not a folder. The
+    /// working directory and its parent (`.` and `..`) are not folders too.
     func testAnEmptyFolderIsDroppedFromTheFolderList() {
         let normalized = WallpaperSettings(
-            folderPaths: ["", "/wallpapers", "   "]
+            folderPaths: ["", "/wallpapers", "   ", ".", ".."]
         ).normalized()
 
         XCTAssertEqual(normalized.folderPaths, ["/wallpapers"])
-    }
-
-    /// A real folder survives the normalization.
-    func testARealFolderSurvivesTheNormalization() {
-        let normalized = WallpaperSettings(
-            folderPaths: ["/wallpapers"]
-        ).normalized()
-
-        XCTAssertEqual(normalized.folderPaths, ["/wallpapers"])
-    }
-
-    /// The working directory is never a folder of the user: an empty path
-    /// points at it.
-    func testTheWorkingDirectoryIsNeverAFolder() {
-        let normalized = WallpaperSettings(
-            folderPaths: ["", "/wallpapers"]
-        ).normalized()
-
-        let workingDirectory = URL(fileURLWithPath: "").standardizedFileURL.path
-        XCTAssertFalse(
-            normalized.folderPaths.contains {
-                URL(fileURLWithPath: $0).standardizedFileURL.path == workingDirectory
-            }
-        )
     }
 
     /// A relative folder would be resolved against the working directory of
@@ -223,16 +167,6 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
         let normalized = WallpaperSettings(folderPaths: ["Pictures"]).normalized()
 
         XCTAssertEqual(normalized.folderPaths, [expected])
-    }
-
-    /// The working directory and its parent are not folders of the user, so
-    /// they are dropped.
-    func testTheWorkingDirectoryIsDroppedFromTheFolderList() {
-        let normalized = WallpaperSettings(
-            folderPaths: [".", "..", "/wallpapers"]
-        ).normalized()
-
-        XCTAssertEqual(normalized.folderPaths, ["/wallpapers"])
     }
 
     /// The pins are compared with the standardized path of a folder, so an

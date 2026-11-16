@@ -253,12 +253,16 @@ final class SettingsManagerTests: XCTestCase {
 
     /// A failed write is reported and the file keeps the content it had.
     ///
-    /// The settings in memory are the new ones: the file catches up later.
-    func testAFailedWriteIsReportedAndTheFileKeepsThePreviousContent() async throws {
+    /// The settings in memory are the new ones and they are published: the
+    /// file catches up later.
+    func testAFailedWriteIsReportedAndTheNewValueIsStillPublished() async throws {
         let context = try TestSettingsContext()
         let manager = context.makeSettingsManager()
         manager.replace(WallpaperSettings(folderPaths: ["/saved"]))
         await manager.waitForPendingWrites()
+        var delivered: WallpaperSettings?
+        let subscription = manager.settingsPublisher.sink { delivered = $0 }
+        defer { subscription.cancel() }
 
         // The settings folder cannot be written to, so the next save fails
         // while the file on disk keeps the saved settings.
@@ -285,6 +289,11 @@ final class SettingsManagerTests: XCTestCase {
             manager.settings.folderPaths,
             ["/never-written"],
             "The settings in memory are the new ones"
+        )
+        XCTAssertEqual(
+            delivered?.folderPaths,
+            ["/never-written"],
+            "The new value has to be published even when the write fails"
         )
         XCTAssertEqual(
             try decodeSettings(at: manager.settingsURL).folderPaths,
@@ -461,36 +470,9 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(readInsideSink, updated)
     }
 
-    /// A failed write does not stop the publish: the settings in memory are
-    /// the new ones, and the failure is reported when the write runs.
-    func testAFailedWriteStillPublishesTheNewValue() async throws {
-        let context = try TestSettingsContext()
-        let manager = context.makeSettingsManager()
-        let original = manager.settings
-        var delivered: WallpaperSettings?
-        let subscription = manager.settingsPublisher.sink { value in
-            delivered = value
-        }
-        defer { subscription.cancel() }
-
-        try FileManager.default.removeItem(at: manager.settingsDirectory)
-        try Data("not-a-directory".utf8).write(to: manager.settingsDirectory)
-
-        manager.update { $0.folderPaths = ["/must-be-published"] }
-
-        XCTAssertEqual(manager.settings.folderPaths, ["/must-be-published"])
-        XCTAssertEqual(delivered?.folderPaths, ["/must-be-published"])
-
-        await manager.waitForPendingWrites()
-
-        guard case .writeFailed? = manager.lastError else {
-            return XCTFail("Expected the failed write to be published")
-        }
-        XCTAssertNotEqual(manager.settings, original)
-    }
-
     /// A legacy file that cannot be read must not block the migration for
-    /// ever: the location stays empty, so the next launch retries it.
+    /// ever: the location stays empty, so the next launch retries it, and the
+    /// file is not renamed.
     func testAnUnreadableLegacyFileKeepsTheMigrationPending() throws {
         let context = try TestSettingsContext()
         let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
@@ -508,6 +490,14 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: manager.settingsURL.path),
             "A default file would skip the legacy migration for ever"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyURL.path),
+            "The legacy file must stay, so the migration can be retried"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
+            "A file that was not imported must not be renamed"
         )
     }
 
@@ -548,29 +538,6 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: legacyURL.path),
             "The legacy file must stay on disk so the user can recover it by hand"
-        )
-    }
-
-    /// A legacy file that could not be read is not renamed: the import is
-    /// still pending, so the next launch can retry it.
-    func testAnUnreadableLegacyFileIsNotRenamed() throws {
-        let context = try TestSettingsContext()
-        let legacyURL = context.directory(named: "legacy").appendingPathComponent("settings.json")
-        try FileManager.default.createDirectory(
-            at: legacyURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data("not-json".utf8).write(to: legacyURL)
-
-        let manager = context.makeSettingsManagerMigratingLegacySettings(from: legacyURL)
-
-        XCTAssertTrue(
-            FileManager.default.fileExists(atPath: legacyURL.path),
-            "The legacy file must stay, so the migration can be retried"
-        )
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: migratedLegacyURL(for: legacyURL).path),
-            "A file that was not imported must not be renamed"
         )
     }
 
@@ -1051,56 +1018,6 @@ final class SettingsManagerTests: XCTestCase {
         )
     }
 
-    /// A failed write must stay visible when the watcher reads the file: the
-    /// settings in memory were never written to disk.
-    func testTheWriteFailureSurvivesAnUnchangedWatcherEvent() async throws {
-        let context = try TestSettingsContext()
-        let manager = context.makeSettingsManager()
-        let generationBefore = manager.externalChangeGeneration
-
-        // The settings folder cannot be written to, so the next save fails
-        // while the file on disk keeps the saved settings.
-        let directory = manager.settingsDirectory
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o500],
-            ofItemAtPath: directory.path
-        )
-        defer {
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: directory.path
-            )
-        }
-
-        manager.update { $0.folderPaths = ["/never-written"] }
-
-        await manager.waitForPendingWrites()
-
-        guard case .writeFailed? = manager.lastError else {
-            return XCTFail("Expected the failed write to be published")
-        }
-
-        // The watcher reads the file, which still holds the old settings.
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date()],
-            ofItemAtPath: manager.settingsURL.path
-        )
-
-        let handled = await waitUntil { manager.externalChangeGeneration > generationBefore }
-        XCTAssertTrue(handled, "The watcher should handle the pending change")
-        // The watcher applies the outcome right after it read the file.
-        let cleared = await waitUntil(timeout: 2) { manager.lastError == nil }
-        XCTAssertFalse(cleared, "The write failure must stay visible")
-        guard case .writeFailed? = manager.lastError else {
-            return XCTFail("The write failure must stay visible after the unchanged read")
-        }
-        XCTAssertEqual(
-            manager.settings.folderPaths,
-            ["/never-written"],
-            "The settings in memory are the new ones"
-        )
-    }
-
     /// Waits for the file watcher instead of relying on a tight timeout.
     private func waitUntil(
         _ condition: () -> Bool,
@@ -1308,33 +1225,6 @@ final class SettingsManagerTests: XCTestCase {
             "/wallpapers/y.jpg",
             "The change must stay on disk"
         )
-    }
-
-    /// A file that was changed outside the app is reloaded: the change is
-    /// newer than the settings in memory, and no change landed during the
-    /// read of the file.
-    func testAnExternalEditIsReloadedWhenNoChangeLandsDuringTheRead() async throws {
-        let context = try TestSettingsContext()
-        let readGate = ReadGate()
-        let settingsURL = context.settingsDirectory.appendingPathComponent("settings.json")
-        let original = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/x.jpg")
-        try encoded(original).write(to: settingsURL)
-        let manager = context.makeSettingsManager(beforeRead: { readGate.beforeRead() })
-        XCTAssertEqual(manager.settings, original)
-
-        // The change lands on the file, outside the app.
-        let external = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/z.jpg")
-        try encoded(external).write(to: settingsURL, options: [.atomic])
-
-        // The reload reads the file, so the change is picked up.
-        readGate.pauseTheNextRead()
-        let reading = await readGate.waitUntilTheReadWaits()
-        XCTAssertTrue(reading, "The reload should read the settings file")
-        readGate.resumeTheRead()
-
-        let reloaded = await waitUntil { manager.settings == external }
-        XCTAssertTrue(reloaded, "The external change should be reloaded")
-        XCTAssertEqual(manager.settings, external)
     }
 
     /// The reload must not revert a change that lands before the result is

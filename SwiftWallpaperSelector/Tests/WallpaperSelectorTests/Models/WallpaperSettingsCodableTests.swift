@@ -15,16 +15,6 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(settings.historyLimit, 20)
     }
 
-    func testMigratesLegacySingleFolderAndRelativeWallpaper() throws {
-        let data = Data("{\"folderPath\":\"/wallpapers\",\"currentWallpaper\":\"sunset.jpg\"}".utf8)
-
-        let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
-
-        XCTAssertEqual(settings.folderPaths, ["/wallpapers"])
-        XCTAssertEqual(settings.currentWallpaper, "/wallpapers/sunset.jpg")
-        XCTAssertEqual(settings.rotationAction, .shuffle)
-    }
-
     func testEncodesElectronCamelCaseKeys() throws {
         let data = try JSONEncoder().encode(WallpaperSettings(activeThemeID: "theme-1", appearanceDarkThemeID: "theme-2"))
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -281,11 +271,12 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(settings.folderPaths, ["/legacy"])
         XCTAssertEqual(settings.currentWallpaper, "/legacy/sunset.jpg")
         XCTAssertEqual(settings.wallpaperHistory, ["/legacy/sunset.jpg"])
+        XCTAssertEqual(settings.rotationAction, .shuffle)
     }
 
-    /// A relative legacy folder has to become absolute: the migration writes
-    /// the folder list into the file, so a relative folder would make the
-    /// relative wallpaper unreadable on the next launch.
+    /// A relative legacy folder is resolved against the home directory and
+    /// made absolute: the legacy settings file lived in the home directory,
+    /// and the migration writes the folder list into the file.
     func testARelativeLegacyFolderBecomesAbsolute() throws {
         let data = Data("""
         {"folderPath":"wallpapers","currentWallpaper":"sunset.jpg","wallpaperHistory":["sunset.jpg"]}
@@ -293,14 +284,13 @@ final class WallpaperSettingsCodableTests: XCTestCase {
 
         let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
 
-        let folder = try XCTUnwrap(settings.folderPaths.first)
-        XCTAssertEqual(settings.folderPaths.count, 1)
-        XCTAssertTrue(folder.hasPrefix("/"), "The legacy folder has to be absolute: \(folder)")
-        XCTAssertTrue(folder.hasSuffix("/wallpapers"), "The legacy folder has to be kept: \(folder)")
-        XCTAssertEqual(settings.currentWallpaper, folder + "/sunset.jpg")
-        XCTAssertEqual(settings.wallpaperHistory, [folder + "/sunset.jpg"])
-        XCTAssertEqual(settings.currentWallpaper?.hasPrefix("/"), true)
-        XCTAssertEqual(settings.wallpaperHistory.first?.hasPrefix("/"), true)
+        let expected = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path)
+            .appendingPathComponent("wallpapers")
+            .standardizedFileURL
+            .path
+        XCTAssertEqual(settings.folderPaths, [expected])
+        XCTAssertEqual(settings.currentWallpaper, expected + "/sunset.jpg")
+        XCTAssertEqual(settings.wallpaperHistory, [expected + "/sunset.jpg"])
     }
 
     /// A legacy folder that starts with a tilde is expanded, so it is
@@ -422,7 +412,7 @@ final class WallpaperSettingsCodableTests: XCTestCase {
     /// next save.
     func testTheLegacyFolderIsUsedWhenTheFolderPathsListHasNoUsableFolder() throws {
         let data = Data("""
-        {"folderPath":"/legacy","folderPaths":[42],"currentWallpaper":"sunset.jpg","wallpaperHistory":["sunset.jpg"]}
+        {"folderPath":"/legacy","folderPaths":["",42],"currentWallpaper":"sunset.jpg","wallpaperHistory":["sunset.jpg"]}
         """.utf8)
 
         let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
@@ -438,19 +428,6 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(nextLaunch.folderPaths, ["/legacy"])
         XCTAssertEqual(nextLaunch.currentWallpaper, "/legacy/sunset.jpg")
         XCTAssertEqual(nextLaunch.wallpaperHistory, ["/legacy/sunset.jpg"])
-    }
-
-    /// An empty folder is not a usable folder, so the list is a value that
-    /// cannot be used.
-    func testTheLegacyFolderIsUsedWhenTheFolderPathsListHasOnlyEmptyAndBrokenFolders() throws {
-        let data = Data("""
-        {"folderPath":"/legacy","folderPaths":["",42],"currentWallpaper":"sunset.jpg"}
-        """.utf8)
-
-        let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
-
-        XCTAssertEqual(settings.folderPaths, ["/legacy"])
-        XCTAssertEqual(settings.currentWallpaper, "/legacy/sunset.jpg")
     }
 
     /// A list with a usable folder is used: the file says which folders it
@@ -536,24 +513,6 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(settings.folderPaths, [])
         XCTAssertNil(settings.currentWallpaper)
         XCTAssertEqual(settings.wallpaperHistory, [])
-    }
-
-    /// A relative legacy folder is resolved against the home directory: the
-    /// legacy settings file lived there.
-    func testARelativeLegacyFolderIsResolvedAgainstTheHomeDirectory() throws {
-        let data = Data("""
-        {"folderPath":"wallpapers","currentWallpaper":"sunset.jpg"}
-        """.utf8)
-
-        let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
-
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let expected = URL(fileURLWithPath: home)
-            .appendingPathComponent("wallpapers")
-            .standardizedFileURL
-            .path
-        XCTAssertEqual(settings.folderPaths, [expected])
-        XCTAssertEqual(settings.currentWallpaper, expected + "/sunset.jpg")
     }
 
     /// A folder path that is empty is the working directory, so it is not a

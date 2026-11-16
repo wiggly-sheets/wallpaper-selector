@@ -5,41 +5,6 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase {
 
-    /// A settings write that happens while the change is being published must
-    /// not leave the app state one change behind.
-    func testANestedSettingsWriteDuringThePublishKeepsTheNewestValue() throws {
-        let context = try TestSettingsContext()
-        let settingsManager = context.makeSettingsManager()
-        let themeProvider = ThemeProvider(settingsManager: settingsManager)
-        let appState = AppState(
-            settingsManager: settingsManager,
-            rotationService: RotationService(
-                settingsManager: settingsManager,
-                wallpaperProvider: MockWallpaperProvider(),
-                themeProvider: themeProvider,
-                wallpaperLibrary: WallpaperLibrary()
-            ),
-            themeProvider: themeProvider,
-            wallpaperLibrary: WallpaperLibrary()
-        )
-
-        var didWriteNestedSettings = false
-        let subscription = appState.settingsPublisher
-            .dropFirst()
-            .sink { settings in
-                // The published value is already the stored one.
-                XCTAssertEqual(appState.settings.folderPaths, settings.folderPaths)
-                guard !didWriteNestedSettings else { return }
-                didWriteNestedSettings = true
-                appState.updateSettings { $0.folderPaths = ["/nested"] }
-            }
-        defer { subscription.cancel() }
-
-        appState.updateSettings { $0.folderPaths = ["/outer"] }
-
-        XCTAssertEqual(appState.settings.folderPaths, ["/nested"])
-    }
-
     /// Every subscriber must end on the newest value when a subscriber writes
     /// settings while the change is published.
     ///
@@ -70,7 +35,9 @@ final class AppStateTests: XCTestCase {
         // would get the older value.
         cancellables.append(appState.settingsPublisher
             .dropFirst()
-            .sink { _ in
+            .sink { settings in
+                // The published value is already the stored one.
+                XCTAssertEqual(appState.settings.folderPaths, settings.folderPaths)
                 guard !didWriteNestedSettings else { return }
                 didWriteNestedSettings = true
                 appState.updateSettings { $0.folderPaths = ["/nested"] }
@@ -323,8 +290,12 @@ final class AppStateTests: XCTestCase {
             $0.currentWallpaper = image.path
             $0.wallpaperHistory = [image.path]
         }
-        // Give a wrongly restarted scan the chance to run.
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        // The update runs on the main actor: a wrongly restarted scan would be
+        // enqueued right away. Let the queued work run instead of guessing a
+        // time, then assert that no scan was started.
+        for _ in 0..<10 {
+            await Task.yield()
+        }
 
         let loadsAfterTheWallpaperChange = await library.loadCount
         XCTAssertEqual(
@@ -393,7 +364,7 @@ final class AppStateTests: XCTestCase {
 
     /// Selecting the theme that is already active changes nothing, so it must
     /// not shuffle the wallpaper.
-    func testSelectingTheAlreadyActiveThemeDoesNotShuffleTheWallpaper() async throws {
+    func testSelectingTheAlreadyActiveThemeDoesNotShuffleTheWallpaper() throws {
         let context = try TestSettingsContext()
         let settingsManager = context.makeSettingsManager()
         let themeProvider = ThemeProvider(settingsManager: settingsManager)
@@ -422,12 +393,9 @@ final class AppStateTests: XCTestCase {
         }
 
         appState.setActiveTheme(theme.id)
-        // A shuffle would be enqueued on the next turn of the main actor.
-        try? await Task.sleep(nanoseconds: 300_000_000)
 
-        XCTAssertTrue(
-            mockProvider.appliedURLs.isEmpty,
-            "Selecting the already-active theme must not shuffle the wallpaper"
-        )
+        // A shuffle would mark the rotation busy right away.
+        XCTAssertFalse(appState.isRotationBusy, "Selecting the active theme must not start a rotation")
+        XCTAssertTrue(mockProvider.appliedURLs.isEmpty)
     }
 }

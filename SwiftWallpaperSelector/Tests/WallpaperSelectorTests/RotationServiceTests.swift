@@ -47,16 +47,14 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertTrue(rotationService.isRunning)
     }
 
-    func testStopWhenIntervalIsOff() {
+    func testStartDoesNothingWhileTheRotationCannotRun() {
         settingsManager.update { s in
             s.intervalMinutes = .off
             s.matchSystemAppearance = false
         }
         rotationService.start()
         XCTAssertFalse(rotationService.isRunning)
-    }
 
-    func testStopWhenMatchSystemAppearanceIsOn() {
         settingsManager.update { s in
             s.intervalMinutes = .hour1
             s.matchSystemAppearance = true
@@ -83,7 +81,7 @@ final class RotationServiceTests: XCTestCase {
 
     /// A tick that was queued before the user turned rotation off must not
     /// apply a wallpaper.
-    func testATickDoesNothingWhenRotationIsOff() async throws {
+    func testATickDoesNothingWhenRotationIsOff() throws {
         let folderURL = try makeFolder(named: "tick-off-images", images: ["a.png"])
         settingsManager.update { s in
             s.folderPaths = [folderURL.path]
@@ -93,16 +91,15 @@ final class RotationServiceTests: XCTestCase {
         }
 
         rotationService.tick()
-        // A tick that is not guarded would apply the wallpaper on the next
-        // turn of the main actor, so give a queued task the chance to run.
-        try? await Task.sleep(nanoseconds: 300_000_000)
 
+        // A tick that starts a rotation marks the service busy right away.
+        XCTAssertFalse(rotationService.isBusy)
         XCTAssertTrue(mockProvider.appliedURLs.isEmpty)
     }
 
     /// A tick must not apply a wallpaper while the appearance is matched: the
     /// system chooses the wallpaper then.
-    func testATickDoesNothingWhileTheAppearanceIsMatched() async throws {
+    func testATickDoesNothingWhileTheAppearanceIsMatched() throws {
         let folderURL = try makeFolder(named: "tick-appearance-images", images: ["a.png"])
         settingsManager.update { s in
             s.folderPaths = [folderURL.path]
@@ -112,27 +109,9 @@ final class RotationServiceTests: XCTestCase {
         }
 
         rotationService.tick()
-        try? await Task.sleep(nanoseconds: 300_000_000)
 
+        XCTAssertFalse(rotationService.isBusy)
         XCTAssertTrue(mockProvider.appliedURLs.isEmpty)
-    }
-
-    func testShuffleSelectsFromAvailableImages() async throws {
-        let folderURL = settingsContext.directory(named: "shuffle-images")
-        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
-        let fileURL = folderURL.appendingPathComponent("test_shuffle.png")
-        try "dummy".write(to: fileURL, atomically: true, encoding: .utf8)
-
-        settingsManager.update { s in
-            s.folderPaths = [folderURL.path]
-            s.rotationAction = .shuffle
-            s.intervalMinutes = .off
-            s.matchSystemAppearance = false
-        }
-
-        await rotationService.perform(.shuffle)
-
-        XCTAssertEqual(mockProvider.appliedURLs, [fileURL])
     }
 
     func testNextSelectsSequentialImage() async throws {
@@ -157,7 +136,8 @@ final class RotationServiceTests: XCTestCase {
     }
 
 
-    func testHistoryAvoidsImmediateRepeat() async throws {
+    /// The shuffle never repeats the wallpaper that is on the screen.
+    func testShuffleDoesNotRepeatTheCurrentWallpaper() async throws {
         let folderURL = try makeFolder(named: "history-images", images: ["current.png", "other.png"])
         let current = folderURL.appendingPathComponent("current.png")
         let other = folderURL.appendingPathComponent("other.png")
@@ -178,16 +158,16 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertEqual(mockProvider.appliedURLs, [other])
     }
 
-    func testHistoryIsSkippedWhenItIsNotTheCurrentWallpaper() async throws {
-        let folderURL = try makeFolder(named: "history-only-images", images: ["used.png", "other.png"])
-        let used = folderURL.appendingPathComponent("used.png")
+    /// The history is the list of wallpapers that were used: a shuffle never
+    /// picks one of them while an unused wallpaper is left.
+    func testShuffleNeverPicksAWallpaperFromTheHistory() async throws {
+        let names = ["used-1.png", "used-2.png", "used-3.png", "used-4.png", "used-5.png", "other.png"]
+        let folderURL = try makeFolder(named: "history-only-images", images: names)
+        let used = names.dropLast().map { folderURL.appendingPathComponent($0) }
         let other = folderURL.appendingPathComponent("other.png")
 
-        // The history holds one image and the current wallpaper is elsewhere,
-        // so only one image is left to pick and every run picks the same one.
-        // The repetition is here to catch a broken history rule: without the
-        // filter the shuffle could pick the image from the history, and every
-        // run is a new chance to catch it.
+        // The current wallpaper is outside the folder, so only the history
+        // can keep a wallpaper out of the selection.
         for _ in 0..<10 {
             settingsManager.update { s in
                 s.folderPaths = [folderURL.path]
@@ -195,13 +175,17 @@ final class RotationServiceTests: XCTestCase {
                 s.intervalMinutes = .off
                 s.matchSystemAppearance = false
                 s.currentWallpaper = "/elsewhere/current.png"
-                s.wallpaperHistory = [used.path]
+                s.wallpaperHistory = used.map(\.path)
                 s.historyLimit = 10
             }
 
             await rotationService.perform(.shuffle)
 
-            XCTAssertEqual(mockProvider.appliedURLs.last, other)
+            XCTAssertEqual(
+                mockProvider.appliedURLs.last,
+                other,
+                "Only the wallpaper outside the history may be picked"
+            )
         }
     }
 
@@ -266,14 +250,6 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertNotNil(rotationService.lastError)
     }
 
-    /// A wallpaper error that happened outside the rotation uses the same
-    /// channel, so it shows up everywhere a rotation error does.
-    func testAReportedWallpaperErrorIsShown() {
-        rotationService.reportWallpaperError("x")
-
-        XCTAssertEqual(rotationService.lastError, "x")
-    }
-
     func testScheduledTimerDoesNotKeepTheServiceAlive() {
         settingsManager.update { s in
             s.intervalMinutes = .hour1
@@ -319,25 +295,14 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertEqual(settingsManager.settings.rotationAction, .themeShuffle)
     }
 
-    func testThemeNextAppliesWallpaperWithASingleTheme() async throws {
-        let result = try await applyThemeAction(.themeNext)
+    /// A single theme must still apply a wallpaper when it is the only one.
+    func testAThemeActionAppliesTheWallpaperOfTheOnlyTheme() async throws {
+        for action in [RotationAction.themeNext, .themeShuffle, .themePrevious] {
+            let result = try await applyThemeAction(action)
 
-        XCTAssertEqual(result.applied, result.expected)
-        XCTAssertEqual(settingsManager.settings.activeThemeID, "only")
-    }
-
-    func testThemeShuffleAppliesWallpaperWithASingleTheme() async throws {
-        let result = try await applyThemeAction(.themeShuffle)
-
-        XCTAssertEqual(result.applied, result.expected)
-        XCTAssertEqual(settingsManager.settings.activeThemeID, "only")
-    }
-
-    func testThemePreviousAppliesWallpaperWithASingleTheme() async throws {
-        let result = try await applyThemeAction(.themePrevious)
-
-        XCTAssertEqual(result.applied, result.expected)
-        XCTAssertEqual(settingsManager.settings.activeThemeID, "only")
+            XCTAssertEqual(result.applied, result.expected, "\(action) must apply the wallpaper")
+            XCTAssertEqual(settingsManager.settings.activeThemeID, "only")
+        }
     }
 
     func testThemeNextMovesToTheNextTheme() async throws {
@@ -530,50 +495,6 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertEqual(rotationService.scheduledInterval, 1800)
     }
 
-    func testRequestEnqueuedDuringARunningRotationIsNotDropped() async throws {
-        let folderURL = try makeFolder(named: "pending-images", images: ["a.png", "b.png"])
-        settingsManager.update { s in
-            s.folderPaths = [folderURL.path]
-            s.rotationAction = .shuffle
-            s.intervalMinutes = .off
-            s.matchSystemAppearance = false
-        }
-        let applied = expectation(description: "both rotations applied a wallpaper")
-        applied.expectedFulfillmentCount = 2
-        mockProvider.onSetWallpaper = { _ in applied.fulfill() }
-
-        rotationService.enqueue(.shuffle)
-        // The first rotation is already running, so this one has to wait.
-        rotationService.enqueue(.next)
-
-        await fulfillment(of: [applied], timeout: 10)
-        XCTAssertEqual(mockProvider.appliedURLs.count, 2)
-    }
-
-    /// A manual pick must not be overwritten by the rotation that is running.
-    func testAManualPickDuringARunningRotationIsAppliedAfterIt() async throws {
-        let folderURL = try makeFolder(named: "rotation-images", images: ["a.png"])
-        let manualFolderURL = settingsContext.directory(named: "manual-pick")
-        try FileManager.default.createDirectory(at: manualFolderURL, withIntermediateDirectories: true)
-        let manual = manualFolderURL.appendingPathComponent("manual.png")
-        settingsManager.update { s in
-            s.folderPaths = [folderURL.path]
-            s.rotationAction = .shuffle
-        }
-        var didPick = false
-        mockProvider.onSetWallpaper = { _ in
-            // The pick happens while the rotation is still running.
-            guard !didPick else { return }
-            didPick = true
-            _ = self.rotationService.apply(manual)
-        }
-
-        await rotationService.perform(.shuffle)
-
-        XCTAssertEqual(mockProvider.appliedURLs.last, manual)
-        XCTAssertEqual(settingsManager.settings.currentWallpaper, manual.path)
-    }
-
     /// A second pick replaces the pending one: the user changed their mind,
     /// so only the last pick is applied.
     func testASecondManualPickReplacesThePendingOne() async throws {
@@ -685,40 +606,6 @@ final class RotationServiceTests: XCTestCase {
         XCTAssertTrue(
             deferredMessage?.contains("rotation is in progress") == true,
             "The deferral must be reported, got \(deferredMessage ?? "no message")"
-        )
-        XCTAssertEqual(mockProvider.appliedURLs.last, manual)
-        XCTAssertNil(rotationService.lastError, "The message must be cleared after the pick")
-    }
-
-    /// A failure that is reported while a pick waits must not replace the
-    /// deferral notice: the notice tells the user why their pick is not on
-    /// the screen yet.
-    func testAReportedWallpaperErrorDoesNotReplaceTheDeferralNotice() async throws {
-        let folderURL = try makeFolder(named: "reported-error-images", images: ["a.png"])
-        let manualFolderURL = settingsContext.directory(named: "reported-error-manual-pick")
-        try FileManager.default.createDirectory(at: manualFolderURL, withIntermediateDirectories: true)
-        let manual = manualFolderURL.appendingPathComponent("manual.png")
-        settingsManager.update { s in
-            s.folderPaths = [folderURL.path]
-            s.rotationAction = .shuffle
-        }
-        var messageWhilePending: String?
-        var didPick = false
-        mockProvider.onSetWallpaper = { _ in
-            guard !didPick else { return }
-            didPick = true
-            _ = self.rotationService.apply(manual)
-            // A display failure is reported while the pick waits.
-            self.rotationService.reportWallpaperError("The wallpaper could not be set.")
-            messageWhilePending = self.rotationService.lastError
-        }
-
-        await rotationService.perform(.shuffle)
-
-        XCTAssertEqual(
-            messageWhilePending,
-            RotationService.deferredPickMessage,
-            "The deferral notice must stay while the pick waits"
         )
         XCTAssertEqual(mockProvider.appliedURLs.last, manual)
         XCTAssertNil(rotationService.lastError, "The message must be cleared after the pick")

@@ -90,15 +90,6 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(appState.settings.themes.first?.name, "Test Theme")
     }
 
-    func testToggleMatchSystemAppearance() {
-        XCTAssertFalse(viewModel.matchSystemAppearance)
-        viewModel.toggleMatchSystemAppearance()
-        XCTAssertTrue(viewModel.matchSystemAppearance)
-        XCTAssertTrue(appState.settings.matchSystemAppearance)
-        viewModel.toggleMatchSystemAppearance()
-        XCTAssertFalse(viewModel.matchSystemAppearance)
-    }
-
     func testSettersWriteThroughToAppState() {
         // A theme action needs a theme: without one the stored action is
         // normalised into a wallpaper action.
@@ -112,6 +103,11 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertTrue(appState.settings.matchSystemAppearance)
         XCTAssertEqual(appState.settings.intervalMinutes, .hour1)
         XCTAssertEqual(appState.settings.rotationAction, .themeNext)
+
+        viewModel.toggleMatchSystemAppearance()
+
+        XCTAssertFalse(viewModel.matchSystemAppearance)
+        XCTAssertFalse(appState.settings.matchSystemAppearance)
     }
 
     /// A theme action without a theme would do nothing, so the picker must
@@ -489,11 +485,9 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.isRotationControlDisabled)
     }
 
-    /// The pin of all folders is only read while no theme is set for the
-    /// light appearance: a theme owns the pin of its appearance, so the app
-    /// reads the pin of that theme instead. The picker must be disabled
-    /// then, so a value cannot be picked that the app ignores.
-    func testTheGlobalLightPinIsDisabledWhileAThemeIsSetForTheLightAppearance() {
+    /// A theme that is set for an appearance owns the pin of that appearance,
+    /// so the pin of all folders is not read and the picker must be disabled.
+    func testTheGlobalPinIsDisabledWhileAThemeIsSetForThatAppearance() {
         XCTAssertFalse(viewModel.isGlobalLightPinDisabled)
         XCTAssertFalse(viewModel.isGlobalDarkPinDisabled)
 
@@ -502,12 +496,6 @@ final class SettingsViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.isGlobalLightPinDisabled)
         XCTAssertFalse(viewModel.isGlobalDarkPinDisabled)
-    }
-
-    /// The same rule for the dark appearance.
-    func testTheGlobalDarkPinIsDisabledWhileAThemeIsSetForTheDarkAppearance() {
-        XCTAssertFalse(viewModel.isGlobalDarkPinDisabled)
-        XCTAssertFalse(viewModel.isGlobalLightPinDisabled)
 
         viewModel.addTheme(Theme(id: "dark", name: "Dark", folderPaths: []))
         viewModel.setAppearanceThemeIDs(light: nil, dark: "dark")
@@ -553,22 +541,13 @@ final class SettingsViewModelTests: XCTestCase {
         // The picker writes the value before the change is reported.
         viewModel.themeSource = .light
         viewModel.setThemeSource(.light)
-
         XCTAssertEqual(
             NSApplication.shared.appearance?.name.rawValue,
             NSAppearance.Name.aqua.rawValue
         )
-    }
 
-    /// The dark theme source has to reach the application too.
-    func testSetThemeSourceSetsTheDarkAppearanceOfTheApplication() {
-        let previousAppearance = NSApplication.shared.appearance
-        defer { NSApplication.shared.appearance = previousAppearance }
-
-        // The picker writes the value before the change is reported.
         viewModel.themeSource = .dark
         viewModel.setThemeSource(.dark)
-
         XCTAssertEqual(
             NSApplication.shared.appearance?.name.rawValue,
             NSAppearance.Name.darkAqua.rawValue

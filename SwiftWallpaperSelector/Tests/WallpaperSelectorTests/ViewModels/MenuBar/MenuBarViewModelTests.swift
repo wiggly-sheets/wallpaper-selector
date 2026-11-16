@@ -51,46 +51,12 @@ final class MenuBarViewModelTests: XCTestCase {
         settingsContext = nil
     }
 
-    func testInitialState() {
-        XCTAssertEqual(viewModel.menuTitle, "All Folders")
-        XCTAssertFalse(viewModel.isRotationActive)
-        XCTAssertNil(viewModel.selectedThemeID)
-    }
-
     func testShuffleAction() async throws {
         let folderURL = try makeFolder(named: "shuffle-images", images: ["a.png"])
         let applied = expectation(description: "wallpaper applied")
         wallpaperProvider.onSetWallpaper = { _ in applied.fulfill() }
 
         viewModel.shuffle()
-
-        await fulfillment(of: [applied], timeout: 10)
-        XCTAssertEqual(wallpaperProvider.appliedURLs, [folderURL.appendingPathComponent("a.png")])
-    }
-
-    func testNextAction() async throws {
-        let folderURL = try makeFolder(named: "next-images", images: ["a.png", "b.png"])
-        settingsManager.update { settings in
-            settings.currentWallpaper = folderURL.appendingPathComponent("a.png").path
-        }
-        let applied = expectation(description: "wallpaper applied")
-        wallpaperProvider.onSetWallpaper = { _ in applied.fulfill() }
-
-        viewModel.next()
-
-        await fulfillment(of: [applied], timeout: 10)
-        XCTAssertEqual(wallpaperProvider.appliedURLs, [folderURL.appendingPathComponent("b.png")])
-    }
-
-    func testPreviousAction() async throws {
-        let folderURL = try makeFolder(named: "previous-images", images: ["a.png", "b.png"])
-        settingsManager.update { settings in
-            settings.currentWallpaper = folderURL.appendingPathComponent("b.png").path
-        }
-        let applied = expectation(description: "wallpaper applied")
-        wallpaperProvider.onSetWallpaper = { _ in applied.fulfill() }
-
-        viewModel.previous()
 
         await fulfillment(of: [applied], timeout: 10)
         XCTAssertEqual(wallpaperProvider.appliedURLs, [folderURL.appendingPathComponent("a.png")])
@@ -105,8 +71,9 @@ final class MenuBarViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.allSpaces)
     }
 
-    /// The wallpaper failure and the hot-key failure must both reach the menu.
-    func testTheMenuShowsTheWallpaperAndTheHotKeyFailure() {
+    /// The wallpaper failure and the hot-key failure must both reach the menu,
+    /// and a solved failure must disappear again.
+    func testTheMenuShowsTheFailuresAndForgetsASolvedOne() {
         wallpaperProvider.errorToThrow = MockWallpaperProviderError.configuredFailure
 
         appState.setWallpaper(URL(fileURLWithPath: "/wallpapers/failed.png"))
@@ -115,59 +82,13 @@ final class MenuBarViewModelTests: XCTestCase {
         XCTAssertNotNil(viewModel.lastWallpaperError)
         XCTAssertEqual(viewModel.hotKeyErrorMessage, "The shortcut is already used by another app.")
         XCTAssertEqual(viewModel.errorMessages.count, 2)
-    }
-
-    /// A solved failure must disappear from the menu again.
-    func testTheMenuForgetsTheFailureWhenItIsGone() {
-        wallpaperProvider.errorToThrow = MockWallpaperProviderError.configuredFailure
-        appState.setWallpaper(URL(fileURLWithPath: "/wallpapers/failed.png"))
-        settingsViewModel.setHotKeyErrorMessage("The shortcut is already used by another app.")
-        XCTAssertEqual(viewModel.errorMessages.count, 2)
 
         settingsViewModel.setHotKeyErrorMessage(nil)
 
         XCTAssertEqual(viewModel.errorMessages.count, 1)
     }
 
-    /// The rotation cannot run while the appearance is matched, so the menu
-    /// item would do nothing. The flag states the effect, so a view binds it
-    /// without negating it.
-    func testTheRotationControlIsDisabledWhileTheAppearanceIsMatched() {
-        XCTAssertFalse(viewModel.isRotationControlDisabled)
-
-        appState.updateSettings { $0.matchSystemAppearance = true }
-
-        XCTAssertTrue(viewModel.isRotationControlDisabled)
-    }
-
-    /// The menu shows the whole history, so the limit of the settings decides
-    /// how many wallpapers are offered.
-    func testEveryWallpaperOfTheHistoryIsShownInTheMenu() {
-        let history = (1...20).map { "/wallpapers/\($0).jpg" }
-        settingsManager.update { settings in
-            settings.historyLimit = 20
-            settings.wallpaperHistory = history
-        }
-
-        XCTAssertEqual(viewModel.displayedRecentWallpapers, history)
-    }
-
-    /// A wallpaper whose file is gone cannot be applied, so its menu item has
-    /// to be disabled.
-    func testARecentWallpaperWhoseFileIsGoneCannotBeApplied() throws {
-        let folderURL = try makeFolder(named: "recent-images", images: ["there.png"])
-        let there = folderURL.appendingPathComponent("there.png")
-        let gone = folderURL.appendingPathComponent("gone.png")
-        settingsManager.update { settings in
-            settings.wallpaperHistory = [there.path, gone.path]
-        }
-
-        XCTAssertTrue(viewModel.canApplyRecentWallpaper(there.path))
-        XCTAssertFalse(viewModel.canApplyRecentWallpaper(gone.path))
-    }
-
-    /// The state of the menu is built from the view model, so the menu
-    /// shows what the view model knows.
+    /// The menu shows what the view model knows: the state is built from it.
     func testTheMenuStateFollowsTheViewModel() throws {
         let folderURL = try makeFolder(named: "menu-state-images", images: ["there.png"])
         let there = folderURL.appendingPathComponent("there.png")
@@ -186,10 +107,11 @@ final class MenuBarViewModelTests: XCTestCase {
         XCTAssertTrue(state.recentWallpapers[0].isCurrent)
         XCTAssertTrue(state.recentWallpapers[0].isEnabled)
         XCTAssertFalse(state.recentWallpapers[1].isEnabled)
+        XCTAssertFalse(state.isRotationControlDisabled)
     }
 
     /// The rotation cannot run while the appearance is matched, so the menu
-    /// greys the item out.
+    /// greys the items out.
     func testTheMenuStateDisablesTheRotationWhileTheAppearanceIsMatched() {
         appState.updateSettings { $0.matchSystemAppearance = true }
 

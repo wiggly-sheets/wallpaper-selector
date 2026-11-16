@@ -49,33 +49,9 @@ final class ImageDiscoveryServiceTests: XCTestCase {
         )
     }
 
-    func testCollectImageURLsHandlesEmptyFolder() throws {
-        let folder = try createTempFolder()
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let result = ImageDiscoveryService.collectImageURLs(from: [folder.path])
-        XCTAssertTrue(result.isEmpty, "Empty folder should produce an empty result array")
-    }
-
-    /// Overlapping folders must not list the same file twice.
-    func testCollectImageURLsSkipsAFileThatWasAlreadyCollected() throws {
-        let folder = try createTempFolder()
-        defer { try? FileManager.default.removeItem(at: folder) }
-
-        try createFile(at: folder, name: "a.png")
-        try createFile(at: folder, name: "b.png")
-
-        let result = ImageDiscoveryService.collectImageURLs(from: [folder.path, folder.path + "/"])
-
-        XCTAssertEqual(
-            result.map { $0.lastPathComponent },
-            ["a.png", "b.png"],
-            "A file that was already collected must not be listed twice"
-        )
-    }
-
-    /// Two folders that reach the same file through a symlink are the same
-    /// file: it must not be listed twice.
-    func testCollectImageURLsSkipsAFileThatWasAlreadyCollectedThroughASymlink() throws {
+    /// Overlapping folders must not list the same file twice, also when the
+    /// second folder reaches the files through a symlink.
+    func testCollectImageURLsListsEachFileOnlyOnce() throws {
         let folder = try createTempFolder()
         let linkedFolder = try createTempFolder()
         defer {
@@ -85,7 +61,6 @@ final class ImageDiscoveryServiceTests: XCTestCase {
 
         try createFile(at: folder, name: "a.png")
         try createFile(at: folder, name: "b.png")
-        // The second folder reaches the same files through a symlink.
         for name in ["a.png", "b.png"] {
             try FileManager.default.createSymbolicLink(
                 at: linkedFolder.appendingPathComponent(name),
@@ -93,12 +68,14 @@ final class ImageDiscoveryServiceTests: XCTestCase {
             )
         }
 
-        let result = ImageDiscoveryService.collectImageURLs(from: [folder.path, linkedFolder.path])
+        let result = ImageDiscoveryService.collectImageURLs(
+            from: [folder.path, folder.path + "/", linkedFolder.path]
+        )
 
         XCTAssertEqual(
             result.map { $0.lastPathComponent },
             ["a.png", "b.png"],
-            "A file that was already collected through a symlink must not be listed twice"
+            "A file that was already collected must not be listed twice"
         )
     }
 

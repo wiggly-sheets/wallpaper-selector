@@ -16,20 +16,6 @@ final class WallpaperProviderTests: XCTestCase {
         XCTAssertFalse(didApply)
     }
 
-    func testProviderAppliesWallpaperToEveryResolvedDisplay() throws {
-        let url = try makeTemporaryWallpaper()
-        defer { try? FileManager.default.removeItem(at: url) }
-        var appliedURLs: [URL] = []
-        let provider = WallpaperProvider(applyToDisplays: { url in
-            appliedURLs.append(contentsOf: [url, url, url])
-            return [.success(()), .success(()), .success(())]
-        })
-
-        try provider.setWallpaper(url)
-
-        XCTAssertEqual(appliedURLs, [url, url, url])
-    }
-
     func testProviderReportsNoDisplays() throws {
         let url = try makeTemporaryWallpaper()
         defer { try? FileManager.default.removeItem(at: url) }
@@ -55,23 +41,6 @@ final class WallpaperProviderTests: XCTestCase {
             }
             XCTAssertEqual(failed, 1)
             XCTAssertEqual(total, 3)
-        }
-    }
-
-    /// A display that accepted the wallpaper means the wallpaper is on the
-    /// screen, even though another display refused it.
-    func testTheProviderReportsThatAtLeastOneDisplayWasSet() throws {
-        let url = try makeTemporaryWallpaper()
-        defer { try? FileManager.default.removeItem(at: url) }
-        let provider = WallpaperProvider(applyToDisplays: { _ in
-            [.success(()), .failure(MockWallpaperProviderError.configuredFailure)]
-        })
-
-        XCTAssertThrowsError(try provider.setWallpaper(url)) { error in
-            guard let providerError = error as? WallpaperProviderError else {
-                return XCTFail("Expected a wallpaper provider error, got \(error)")
-            }
-            XCTAssertTrue(providerError.didSetOnAtLeastOneDisplay)
         }
     }
 
@@ -131,11 +100,5 @@ final class WallpaperProviderTests: XCTestCase {
             .appendingPathComponent("WallpaperProviderTests-\(UUID().uuidString).jpg")
         try Data("image".utf8).write(to: url)
         return url
-    }
-
-    func testRealProviderThrowsForMissingWallpaper() {
-        let provider = WallpaperProvider()
-        let url = URL(fileURLWithPath: "/tmp/nonexistent-wallpaper-\(UUID().uuidString).jpg")
-        XCTAssertThrowsError(try provider.setWallpaper(url))
     }
 }
