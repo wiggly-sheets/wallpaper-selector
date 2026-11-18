@@ -128,10 +128,7 @@ final class AppStateTests: XCTestCase {
             settings.activeThemeID = "theme"
         }
 
-        let deadline = Date().addingTimeInterval(10)
-        while appState.allFolderImages.isEmpty, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(appState.$allFolderImages) { !$0.isEmpty }
 
         XCTAssertEqual(appState.currentThemeImages, [themeImage])
         XCTAssertTrue(
@@ -165,10 +162,7 @@ final class AppStateTests: XCTestCase {
 
         settingsManager.update { $0.folderPaths = [folder.path] }
 
-        let deadline = Date().addingTimeInterval(10)
-        while appState.currentThemeImages.isEmpty, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(appState.$currentThemeImages) { !$0.isEmpty }
 
         XCTAssertEqual(appState.currentThemeImages.count, 1)
         XCTAssertEqual(appState.allFolderImages, appState.currentThemeImages)
@@ -279,10 +273,7 @@ final class AppStateTests: XCTestCase {
 
         settingsManager.update { $0.folderPaths = [folder.path] }
 
-        let deadline = Date().addingTimeInterval(10)
-        while appState.currentThemeImages.isEmpty, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(appState.$currentThemeImages) { $0 == [image] }
         XCTAssertEqual(appState.currentThemeImages, [image])
         let loadsAfterTheFolderChange = await library.loadCount
 
@@ -333,10 +324,7 @@ final class AppStateTests: XCTestCase {
 
         settingsManager.update { $0.folderPaths = [folder.path] }
 
-        let deadline = Date().addingTimeInterval(10)
-        while appState.currentThemeImages.isEmpty, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(appState.$currentThemeImages) { $0 == [firstImage] }
         XCTAssertEqual(appState.currentThemeImages, [firstImage])
 
         let addedImage = folder.appendingPathComponent("b.png")
@@ -350,14 +338,8 @@ final class AppStateTests: XCTestCase {
 
         appState.refreshImagesFromDisk()
 
-        let refreshed = Date().addingTimeInterval(10)
-        while !appState.currentThemeImages.contains(addedImage), Date() < refreshed {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        XCTAssertTrue(
-            appState.currentThemeImages.contains(addedImage),
-            "A file added while the app runs has to show up after a refresh"
-        )
+        let refreshed = await waitForImages(appState.$currentThemeImages) { $0.contains(addedImage) }
+        XCTAssertNotNil(refreshed, "A file added while the app runs has to show up after a refresh")
         let loads = await library.loadCount
         XCTAssertGreaterThan(loads, 1, "The refresh has to ask the library for the images again")
     }

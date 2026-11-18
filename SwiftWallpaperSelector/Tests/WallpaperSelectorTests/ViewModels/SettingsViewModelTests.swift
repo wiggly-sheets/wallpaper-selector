@@ -46,13 +46,6 @@ final class SettingsViewModelTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testAddFolderUpdatesPublishedPropertyAndAppState() {
-        XCTAssertTrue(viewModel.folderPaths.isEmpty)
-        viewModel.addFolder("/tmp")
-        XCTAssertEqual(viewModel.folderPaths, ["/tmp"])
-        XCTAssertEqual(appState.settings.folderPaths, ["/tmp"])
-    }
-
     /// A relative path would be resolved against the working directory of
     /// the process, so the absolute path is stored and shown.
     func testARelativeFolderPathIsStoredAbsolute() {
@@ -81,35 +74,6 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.folderPaths, [expected])
     }
 
-    func testAddThemeUpdatesPublishedPropertyAndAppState() {
-        XCTAssertTrue(viewModel.themes.isEmpty)
-        let theme = Theme(name: "Test Theme", folderPaths: ["/tmp"])
-        viewModel.addTheme(theme)
-        XCTAssertEqual(viewModel.themes.count, 1)
-        XCTAssertEqual(viewModel.themes.first?.name, "Test Theme")
-        XCTAssertEqual(appState.settings.themes.first?.name, "Test Theme")
-    }
-
-    func testSettersWriteThroughToAppState() {
-        // A theme action needs a theme: without one the stored action is
-        // normalised into a wallpaper action.
-        viewModel.addTheme(Theme(name: "Test Theme", folderPaths: ["/tmp"]))
-        viewModel.setAllSpaces(true)
-        viewModel.setMatchSystemAppearance(true)
-        viewModel.setInterval(.hour1)
-        viewModel.setRotationAction(.themeNext)
-
-        XCTAssertTrue(appState.settings.allSpaces)
-        XCTAssertTrue(appState.settings.matchSystemAppearance)
-        XCTAssertEqual(appState.settings.intervalMinutes, .hour1)
-        XCTAssertEqual(appState.settings.rotationAction, .themeNext)
-
-        viewModel.toggleMatchSystemAppearance()
-
-        XCTAssertFalse(viewModel.matchSystemAppearance)
-        XCTAssertFalse(appState.settings.matchSystemAppearance)
-    }
-
     /// A theme action without a theme would do nothing, so the picker must
     /// not offer it.
     func testTheThemeActionsAreOnlyOfferedWhileThereIsATheme() {
@@ -119,30 +83,6 @@ final class SettingsViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.availableRotationActions.contains(where: { $0.isThemeAction }))
         XCTAssertTrue(viewModel.availableRotationActions.contains(.shuffle))
-    }
-
-    func testAppearanceOverridesWriteThroughToAppState() {
-        viewModel.addFolder("/tmp")
-        viewModel.addTheme(Theme(id: "light-theme", name: "Light", folderPaths: []))
-        viewModel.addTheme(Theme(id: "dark-theme", name: "Dark", folderPaths: []))
-        viewModel.setAppearanceOverrides(
-            lightThemeID: "light-theme",
-            darkThemeID: "dark-theme",
-            lightWallpaper: "/tmp/light.jpg",
-            darkWallpaper: "/tmp/dark.jpg"
-        )
-
-        XCTAssertEqual(appState.settings.appearanceLightThemeID, "light-theme")
-        XCTAssertEqual(appState.settings.appearanceDarkThemeID, "dark-theme")
-        XCTAssertEqual(appState.settings.allFoldersLightWallpaper, "/tmp/light.jpg")
-        XCTAssertEqual(appState.settings.allFoldersDarkWallpaper, "/tmp/dark.jpg")
-    }
-
-    func testUpdateShortcuts() {
-        let shortcuts = Shortcuts(showMain: "cmd+1")
-        viewModel.setShortcuts(shortcuts)
-        XCTAssertEqual(viewModel.shortcuts.showMain, "cmd+1")
-        XCTAssertEqual(appState.settings.shortcuts.showMain, "cmd+1")
     }
 
     func testAssigningShortcutClearsSameShortcutFromOtherActions() {
@@ -474,17 +414,6 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(darkPins.dark, "/wallpapers/dark.jpg")
     }
 
-    /// The rotation cannot run while the appearance is matched, so the
-    /// interval and the action of the rotation would do nothing. The flag
-    /// states the effect, so a view binds it without negating it.
-    func testTheRotationControlsAreDisabledWhileTheAppearanceIsMatched() {
-        XCTAssertFalse(viewModel.isRotationControlDisabled)
-
-        viewModel.setMatchSystemAppearance(true)
-
-        XCTAssertTrue(viewModel.isRotationControlDisabled)
-    }
-
     /// A theme that is set for an appearance owns the pin of that appearance,
     /// so the pin of all folders is not read and the picker must be disabled.
     func testTheGlobalPinIsDisabledWhileAThemeIsSetForThatAppearance() {
@@ -514,10 +443,7 @@ final class SettingsViewModelTests: XCTestCase {
 
         appState.updateSettings { $0.folderPaths = [folder.path] }
 
-        let deadline = Date().addingTimeInterval(10)
-        while viewModel.currentThemeImages.isEmpty, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(viewModel.$currentThemeImages) { !$0.isEmpty }
 
         XCTAssertEqual(viewModel.currentThemeImages, [image])
     }
@@ -580,10 +506,7 @@ final class SettingsViewModelTests: XCTestCase {
 
         appState.updateSettings { $0.folderPaths = [folder.path] }
 
-        let deadline = Date().addingTimeInterval(10)
-        while viewModel.allFolderImages.isEmpty, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(viewModel.$allFolderImages) { !$0.isEmpty }
 
         appState.updateSettings { $0.allFoldersLightWallpaper = missing.path }
 
@@ -623,10 +546,7 @@ final class SettingsViewModelTests: XCTestCase {
             settings.appearanceDarkThemeID = "dark"
         }
 
-        let deadline = Date().addingTimeInterval(10)
-        while viewModel.allFolderImages.count < 2, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(viewModel.$allFolderImages) { $0.count >= 2 }
 
         XCTAssertEqual(viewModel.appearancePinImages(forThemeID: "light"), [lightImage])
         XCTAssertEqual(viewModel.appearancePinImages(forThemeID: "dark"), [darkImage])

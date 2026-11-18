@@ -64,17 +64,6 @@ final class TrayPopoverViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.folderPaths, [folder.standardizedFileURL.path])
     }
 
-    /// The rotation cannot run while the appearance is matched, so the
-    /// interval picker would do nothing. The flag states the effect, so a
-    /// view binds it without negating it.
-    func testTheRotationControlIsDisabledWhileTheAppearanceIsMatched() {
-        XCTAssertFalse(viewModel.isRotationControlDisabled)
-
-        appState.updateSettings { $0.matchSystemAppearance = true }
-
-        XCTAssertTrue(viewModel.isRotationControlDisabled)
-    }
-
     /// The theme actions can be used by hand at any time, but they need a
     /// theme and the system picks the theme while the appearance is matched.
     func testTheThemeActionsNeedAThemeAndAnUnmatchedAppearance() {

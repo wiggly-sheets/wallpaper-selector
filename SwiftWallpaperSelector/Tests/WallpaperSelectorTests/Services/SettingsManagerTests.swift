@@ -378,9 +378,8 @@ final class SettingsManagerTests: XCTestCase {
 
         try encoded(external).write(to: manager.settingsURL, options: [.atomic])
 
-        let reloaded = await waitUntil { manager.settings == external }
-        XCTAssertTrue(reloaded, "The manager should pick up the externally written settings")
-        XCTAssertEqual(manager.settings, external)
+        let reloaded = await waitForSettings(manager) { $0 == external }
+        XCTAssertEqual(reloaded, external, "The manager should pick up the externally written settings")
         XCTAssertNil(manager.lastError)
     }
 
@@ -411,8 +410,7 @@ final class SettingsManagerTests: XCTestCase {
 
         try malformed.write(to: manager.settingsURL, options: [.atomic])
 
-        let reported = await waitUntil { manager.lastError != nil }
-        XCTAssertTrue(reported, "The malformed settings file should be reported")
+        await waitForError(manager)
         guard case .decodeFailed? = manager.lastError else {
             return XCTFail("Expected the malformed settings to be reported")
         }
@@ -429,9 +427,8 @@ final class SettingsManagerTests: XCTestCase {
         try encoded(first).write(to: manager.settingsURL, options: [.atomic])
         try encoded(second).write(to: manager.settingsURL, options: [.atomic])
 
-        let updated = await waitUntil { manager.settings == second }
-        XCTAssertTrue(updated, "The newest external settings should win")
-        XCTAssertEqual(manager.settings, second)
+        let updated = await waitForSettings(manager) { $0 == second }
+        XCTAssertEqual(updated, second, "The newest external settings should win")
     }
 
     /// Every external reload gets its own generation, so a reload that finishes
@@ -444,8 +441,8 @@ final class SettingsManagerTests: XCTestCase {
         try encoded(WallpaperSettings(folderPaths: ["/external"]))
             .write(to: manager.settingsURL, options: [.atomic])
 
-        let reloaded = await waitUntil { manager.settings.folderPaths == ["/external"] }
-        XCTAssertTrue(reloaded, "The external settings should be reloaded")
+        let reloaded = await waitForSettings(manager) { $0.folderPaths == ["/external"] }
+        XCTAssertNotNil(reloaded, "The external settings should be reloaded")
         XCTAssertGreaterThan(manager.externalChangeGeneration, generationBefore)
     }
 
@@ -964,8 +961,8 @@ final class SettingsManagerTests: XCTestCase {
         try encoded(WallpaperSettings(folderPaths: ["/external"]))
             .write(to: manager.settingsURL, options: [.atomic])
 
-        let reloaded = await waitUntil { manager.settings.folderPaths == ["/external"] }
-        XCTAssertTrue(reloaded, "The watcher must pick up the external change after the first save")
+        let reloaded = await waitForSettings(manager) { $0.folderPaths == ["/external"] }
+        XCTAssertNotNil(reloaded, "The watcher must pick up the external change after the first save")
     }
 
     /// A write that fails after the quarantine must be reported: the app
@@ -1029,6 +1026,39 @@ final class SettingsManagerTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         return condition()
+    }
+
+    /// Waits for the first settings value the publisher sends that matches.
+    ///
+    /// The reload publishes its result, so the test waits for the event
+    /// instead of asking for the value in a loop.
+    private func waitForSettings(
+        _ manager: SettingsManager,
+        where matches: @escaping (WallpaperSettings) -> Bool,
+        timeout: TimeInterval = 10
+    ) async -> WallpaperSettings? {
+        let delivered = expectation(description: "the settings are published")
+        var result: WallpaperSettings?
+        let subscription = manager.settingsPublisher.first(where: matches).sink { settings in
+            result = settings
+            delivered.fulfill()
+        }
+        defer { subscription.cancel() }
+        await fulfillment(of: [delivered], timeout: timeout)
+        return result
+    }
+
+    /// Waits for the first error the manager reports.
+    private func waitForError(
+        _ manager: SettingsManager,
+        timeout: TimeInterval = 10
+    ) async {
+        let reported = expectation(description: "the error is reported")
+        let subscription = manager.$lastError
+            .first(where: { $0 != nil })
+            .sink { _ in reported.fulfill() }
+        defer { subscription.cancel() }
+        await fulfillment(of: [reported], timeout: timeout)
     }
 
     /// The settings file is deleted externally and the app writes the
@@ -1253,8 +1283,8 @@ final class SettingsManagerTests: XCTestCase {
         let external = WallpaperSettings(folderPaths: ["/wallpapers"], currentWallpaper: "/wallpapers/external.jpg")
         try encoded(external).write(to: settingsURL, options: [.atomic])
 
-        let kept = await waitUntil { manager.settings.currentWallpaper == "/wallpapers/y.jpg" }
-        XCTAssertTrue(kept, "The change must stay in memory")
+        let kept = await waitForSettings(manager) { $0.currentWallpaper == "/wallpapers/y.jpg" }
+        XCTAssertNotNil(kept, "The change must stay in memory")
         await manager.waitForPendingWrites()
 
         XCTAssertEqual(
@@ -1325,9 +1355,8 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertTrue(reading, "The reload should read the settings file")
         readGate.resumeTheRead()
 
-        let reloaded = await waitUntil { manager.settings == external }
-        XCTAssertTrue(reloaded, "The external change has to be adopted")
-        XCTAssertEqual(manager.settings, external)
+        let reloaded = await waitForSettings(manager) { $0 == external }
+        XCTAssertEqual(reloaded, external, "The external change has to be adopted")
         XCTAssertEqual(
             try decodeSettings(at: settingsURL),
             external,
@@ -1412,9 +1441,8 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertTrue(readingTheEdit, "The reload should read the settings file")
         readGate.resumeTheRead()
 
-        let reloaded = await waitUntil { manager.settings == external }
-        XCTAssertTrue(reloaded, "The external change has to be adopted after the failed write")
-        XCTAssertEqual(manager.settings, external)
+        let reloaded = await waitForSettings(manager) { $0 == external }
+        XCTAssertEqual(reloaded, external, "The external change has to be adopted after the failed write")
     }
 
     private func encoded(_ settings: WallpaperSettings, prettyPrinted: Bool = false) throws -> Data {
@@ -1524,6 +1552,7 @@ private final class ReadGate: @unchecked Sendable {
     private let lock = NSLock()
     private var pausesTheNextRead = false
     private var isWaiting = false
+    private var waitingContinuation: CheckedContinuation<Void, Never>?
     private let resume = DispatchSemaphore(value: 0)
 
     /// Pauses the next read.
@@ -1538,11 +1567,14 @@ private final class ReadGate: @unchecked Sendable {
         lock.lock()
         let shouldPause = pausesTheNextRead
         pausesTheNextRead = false
+        let continuation = waitingContinuation
+        waitingContinuation = nil
         isWaiting = shouldPause
         lock.unlock()
 
         guard shouldPause else { return }
         // The test changes the settings and then lets the read continue.
+        continuation?.resume()
         resume.wait()
         lock.lock()
         isWaiting = false
@@ -1550,20 +1582,18 @@ private final class ReadGate: @unchecked Sendable {
     }
 
     /// Waits until the read waits at the gate.
-    func waitUntilTheReadWaits(timeout: TimeInterval = 10) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if waitsForTheRead { return true }
-            try? await Task.sleep(nanoseconds: 20_000_000)
+    func waitUntilTheReadWaits() async -> Bool {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if isWaiting {
+                lock.unlock()
+                continuation.resume()
+                return
+            }
+            waitingContinuation = continuation
+            lock.unlock()
         }
-        return false
-    }
-
-    /// Tells whether the read waits at the gate.
-    private var waitsForTheRead: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return isWaiting
+        return true
     }
 
     /// Lets the waiting read continue.

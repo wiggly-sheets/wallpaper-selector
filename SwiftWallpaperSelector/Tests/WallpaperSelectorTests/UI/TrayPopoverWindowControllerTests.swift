@@ -103,11 +103,8 @@ final class TrayPopoverWindowControllerTests: XCTestCase {
             try Data().write(to: folder.appendingPathComponent(name))
         }
         appState.updateSettings { $0.folderPaths = [folder.path] }
-
-        let deadline = Date().addingTimeInterval(10)
-        while controller.contentHeight() <= heightWithoutWallpapers, Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await waitForImages(appState.$currentThemeImages) { !$0.isEmpty }
+        controller.layout(in: screenFrame)
 
         XCTAssertGreaterThan(
             controller.contentHeight(),

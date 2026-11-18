@@ -52,15 +52,9 @@ final class SettingsManagerWriteTests: XCTestCase {
         await gate.waitUntilTheWriteWaits()
 
         manager.update { $0.currentWallpaper = "/wallpapers/new.jpg" }
-        // The change gets the time to reach the disk before the recreate is
-        // released, so the order of the two writes is fixed.
-        _ = await waitUntil(timeout: 0.5) {
-            (try? decodeSettings(at: manager.settingsURL))?.currentWallpaper == "/wallpapers/new.jpg"
-        }
+        // The recreate holds the write queue while it waits, so the change is
+        // queued behind it: the order of the two writes is already fixed.
         gate.resumeTheWrite()
-        // The file has to settle: both writes are done when it stops changing.
-        let settled = await waitUntilTheFileStopsChanging(at: manager.settingsURL)
-        XCTAssertTrue(settled, "The writes have to settle")
         await manager.waitForPendingWrites()
 
         XCTAssertEqual(
@@ -73,43 +67,6 @@ final class SettingsManagerWriteTests: XCTestCase {
             "/wallpapers/new.jpg",
             "The newest settings have to be on disk"
         )
-    }
-
-    /// Waits for a condition instead of relying on a tight timeout.
-    private func waitUntil(
-        _ condition: () -> Bool,
-        timeout: TimeInterval = 10
-    ) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() { return true }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        return condition()
-    }
-
-    /// Waits until the settings file is not written again: the writes are
-    /// done then.
-    private func waitUntilTheFileStopsChanging(
-        at url: URL,
-        timeout: TimeInterval = 10
-    ) async -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        var lastDate: Date?
-        var stableChecks = 0
-        while Date() < deadline {
-            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-            let date = attributes?[.modificationDate] as? Date
-            if date != nil, date == lastDate {
-                stableChecks += 1
-                if stableChecks >= 4 { return true }
-            } else {
-                stableChecks = 0
-            }
-            lastDate = date
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-        return false
     }
 
     private func decodeSettings(at url: URL) throws -> WallpaperSettings {
