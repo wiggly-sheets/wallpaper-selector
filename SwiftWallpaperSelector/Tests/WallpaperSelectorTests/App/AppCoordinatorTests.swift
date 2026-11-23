@@ -357,6 +357,60 @@ final class AppCoordinatorTests: XCTestCase {
         )
     }
 
+    /// A pin writes the wallpaper of every Space at once, so the user does
+    /// not have to wait for the next rotation.
+    func testPinningASpaceWritesThePinsAndEverySpace() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        let pin = try makeImage(named: "pin.jpg", in: directory)
+        let space = "AAAAAAAA-0000-0000-0000-000000000001"
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path
+        ))
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: applier,
+            desktopImageURL: { wallpaper }
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.spacePins[space] = pin.path }
+
+        XCTAssertEqual(applier.appliedURLs, [wallpaper])
+        XCTAssertEqual(applier.appliedPins.last?[space]?.standardizedFileURL, pin.standardizedFileURL)
+    }
+
+    /// The last pin is removed: the global container is empty in the
+    /// per-Space mode, so the app writes the old mode back before it stops.
+    func testRemovingTheLastPinRestoresTheGlobalWallpaper() throws {
+        let context = try TestSettingsContext()
+        let settingsManager = context.makeSettingsManager()
+        let applier = RecordingAllSpacesApplier()
+        let directory = try makeWallpaperDirectory(in: context)
+        let wallpaper = try makeImage(named: "current.jpg", in: directory)
+        let space = "AAAAAAAA-0000-0000-0000-000000000001"
+        settingsManager.replace(WallpaperSettings(
+            folderPaths: [directory.path],
+            currentWallpaper: wallpaper.path,
+            spacePins: [space: wallpaper.path]
+        ))
+        let coordinator = makeCoordinator(
+            settingsManager: settingsManager,
+            applier: applier,
+            desktopImageURL: { wallpaper }
+        )
+        defer { _ = coordinator }
+
+        coordinator.appState.updateSettings { $0.spacePins = [:] }
+
+        XCTAssertEqual(applier.appliedURLs.last, wallpaper)
+        XCTAssertEqual(applier.appliedPins.last, [:])
+    }
+
     /// The wallpaper only reaches every Space while the setting is on. The
     /// setting is read when the wallpaper is applied, because the user can
     /// turn it off at any moment.
@@ -511,6 +565,8 @@ final class AppCoordinatorTests: XCTestCase {
 @MainActor
 final class RecordingAllSpacesApplier: AllSpacesApplier {
     private(set) var appliedURLs: [URL] = []
+    private(set) var appliedPins: [[String: URL]] = []
+    private(set) var appliedSpaceIDs: [[String]] = []
     /// The reason the applier reports instead of a success.
     var failureMessage: String?
 
@@ -531,8 +587,10 @@ final class RecordingAllSpacesApplier: AllSpacesApplier {
         )
     }
 
-    override func apply(_ imageURL: URL) {
+    override func apply(_ imageURL: URL, pins: [String: URL], spaceIDs: [String]) {
         appliedURLs.append(imageURL)
+        appliedPins.append(pins)
+        appliedSpaceIDs.append(spaceIDs)
         if let failureMessage {
             onResult?(.failure(AllSpacesApplyFailure(imagePath: imageURL.path, reason: failureMessage)))
         } else {

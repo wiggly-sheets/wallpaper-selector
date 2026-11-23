@@ -38,6 +38,11 @@ final class SettingsViewModel: ObservableObject {
 
     @Published var currentWallpaper: String? = nil
 
+    /// The wallpaper a Space keeps, keyed by the UUID of the Space.
+    @Published var spacePins: [String: String] = [:]
+
+    /// The Spaces of the Mac, in the order Mission Control shows them.
+    @Published private(set) var spaces: [DesktopSpace] = []
 
     @Published var appearanceLightThemeID: String? = nil
 
@@ -84,6 +89,7 @@ final class SettingsViewModel: ObservableObject {
     init(appState: AppState, launchAtLoginManager: LaunchAtLoginManager? = nil) {
         self.appState = appState
         self.launchAtLoginManager = launchAtLoginManager ?? LaunchAtLoginManager()
+        spaces = SpaceInventory.spaces()
         syncFromAppState(appState.settings)
 
         appState.settingsPublisher
@@ -333,6 +339,25 @@ final class SettingsViewModel: ObservableObject {
 
     func toggleMatchSystemAppearance() {
         setMatchSystemAppearance(!matchSystemAppearance)
+    }
+
+    /// Re-reads the Spaces. macOS has no notification for a new Space.
+    func refreshSpaces() {
+        spaces = SpaceInventory.spaces()
+    }
+
+    /// Keeps a wallpaper on a Space, or follows the current wallpaper again
+    /// when `path` is `nil`.
+    func setSpacePin(_ path: String?, for spaceID: String) {
+        appState.updateSettings { settings in
+            var newSettings = settings
+            if let path {
+                newSettings.spacePins[spaceID.uppercased()] = path
+            } else {
+                newSettings.spacePins.removeValue(forKey: spaceID.uppercased())
+            }
+            settings = newSettings
+        }
     }
 
     func setAllSpaces(_ enabled: Bool) {
@@ -659,6 +684,7 @@ final class SettingsViewModel: ObservableObject {
         shortcuts = settings.shortcuts
         historyLimit = settings.historyLimit
         currentWallpaper = settings.currentWallpaper
+        spacePins = settings.spacePins
 
         appearanceLightThemeID = settings.appearanceLightThemeID
         appearanceDarkThemeID = settings.appearanceDarkThemeID

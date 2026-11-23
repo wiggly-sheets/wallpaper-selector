@@ -35,6 +35,9 @@ final class AppCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var previousSettings: WallpaperSettings
     private var menuBarHostingController: MenuBarHostingViewController?
+    /// The Spaces that were on the Mac the last time the plan was written.
+    private var knownSpaceIDs: Set<String>
+    private var spaceCheckTimer: Timer?
 
     convenience init() {
         self.init(
@@ -69,8 +72,18 @@ final class AppCoordinator: ObservableObject {
                 // The user can turn the setting off at any moment, so it is
                 // read when the wallpaper is applied and not when the app
                 // starts.
-                guard settingsManager.settings.allSpaces else { return }
-                applier.apply(url)
+                let settings = settingsManager.settings
+                if settings.allSpaces {
+                    applier.apply(url)
+                    return
+                }
+                // Without a pin the app leaves the other Spaces alone.
+                guard !settings.spacePins.isEmpty else { return }
+                applier.apply(
+                    url,
+                    pins: Self.pinnedWallpapers(settings.spacePins),
+                    spaceIDs: SpaceInventory.spaces().map(\.id)
+                )
             }
         )
         let themeProvider = ThemeProvider(settingsManager: settingsManager)
@@ -107,6 +120,7 @@ final class AppCoordinator: ObservableObject {
         self.allSpacesApplier = applier
         self.desktopImageURL = injectedDesktopImageURL
         previousSettings = settingsManager.settings
+        knownSpaceIDs = Set(SpaceInventory.spaces().map(\.id))
 
         appState.settingsPublisher
             .dropFirst()
@@ -146,6 +160,13 @@ final class AppCoordinator: ObservableObject {
         hotKeyManager.register()
         rotationService.updateSettings()
         appearanceMonitor.applyAppearanceWallpaperIfNeeded()
+        updateSpaceMonitoring()
+        // A Space that macOS created while the app was closed has no record
+        // yet. The plan writes one, so the Space does not show the wallpaper
+        // of a Space that is gone.
+        if !previousSettings.allSpaces && !previousSettings.spacePins.isEmpty {
+            Task { @MainActor [weak self] in self?.applySpaceWallpapers() }
+        }
 
         NotificationCenter.default.addObserver(
             self,
@@ -162,6 +183,7 @@ final class AppCoordinator: ObservableObject {
     }
 
     deinit {
+        spaceCheckTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -177,12 +199,25 @@ final class AppCoordinator: ObservableObject {
         if previous.allSpaces != current.allSpaces {
             if current.allSpaces {
                 applyCurrentWallpaperToAllSpaces()
+            } else if !current.spacePins.isEmpty {
+                // The pins were dormant while the global wallpaper won. They
+                // apply again now.
+                applySpaceWallpapers()
             }
             // The app only stops patching when the setting is switched off.
             // Nothing is restored: the next wallpaper change writes a
             // per-Space entry through `setDesktopImageURL`, which ends the
             // global state on its own.
         }
+
+        if previous.spacePins != current.spacePins {
+            knownSpaceIDs = Set(SpaceInventory.spaces().map(\.id))
+            // An empty plan is written too when the last pin is removed: the
+            // global container is idle then, and every Space would keep the
+            // wallpaper of the plan that is gone.
+            applySpaceWallpapers()
+        }
+        updateSpaceMonitoring()
 
         // Only the effective appearance context re-applies the pin: renaming
         // or adding a theme that is not the appearance theme must not
@@ -259,6 +294,58 @@ final class AppCoordinator: ObservableObject {
         allSpacesApplier.apply(url)
     }
 
+    /// Writes the wallpaper of every Space: the pins, and the current
+    /// wallpaper for a Space without one.
+    private func applySpaceWallpapers() {
+        guard let url = wallpaperOnScreen() else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let settings = settingsManager.settings
+        guard !settings.allSpaces, !settings.spacePins.isEmpty else {
+            // No pin is left: a store in the per-Space mode would keep an
+            // idle global container, so it is written back.
+            allSpacesApplier.apply(url)
+            return
+        }
+        allSpacesApplier.apply(
+            url,
+            pins: Self.pinnedWallpapers(settings.spacePins),
+            spaceIDs: SpaceInventory.spaces().map(\.id)
+        )
+    }
+
+    private static func pinnedWallpapers(_ pins: [String: String]) -> [String: URL] {
+        Dictionary(uniqueKeysWithValues: pins.map { id, path in
+            (id, URL(fileURLWithPath: path))
+        })
+    }
+
+    /// Watches for a Space that macOS created after the plan was written.
+    ///
+    /// macOS creates the record of a Space only when its wallpaper is set, so
+    /// a Space that appears with `.spacePins` set gets no wallpaper at all.
+    /// The list is polled while a pin exists; there is no notification for a
+    /// new Space.
+    private func updateSpaceMonitoring() {
+        let wanted = !settingsManager.settings.allSpaces
+            && !settingsManager.settings.spacePins.isEmpty
+        if wanted, spaceCheckTimer == nil {
+            spaceCheckTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.checkForNewSpaces() }
+            }
+        } else if !wanted {
+            spaceCheckTimer?.invalidate()
+            spaceCheckTimer = nil
+        }
+    }
+
+    private func checkForNewSpaces() {
+        let ids = Set(SpaceInventory.spaces().map(\.id))
+        let added = ids.subtracting(knownSpaceIDs)
+        knownSpaceIDs = ids
+        guard !added.isEmpty else { return }
+        applySpaceWallpapers()
+    }
+
     /// The wallpaper that is on the screen.
     private func wallpaperOnScreen() -> URL? {
         if let onScreen = desktopImageURL() { return onScreen }
@@ -303,6 +390,12 @@ final class AppCoordinator: ObservableObject {
         // takes the shortcut back. A successful registration reports no error,
         // so the error item disappears on its own.
         hotKeyManager.register()
+        // A new Space is often created from Mission Control and then entered,
+        // so the activation is a good moment to look without waiting for the
+        // timer.
+        if spaceCheckTimer != nil {
+            checkForNewSpaces()
+        }
     }
 
     /// The settings are written on a queue, so a change that was made a

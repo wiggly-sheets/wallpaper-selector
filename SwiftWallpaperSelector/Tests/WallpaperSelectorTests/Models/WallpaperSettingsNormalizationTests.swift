@@ -32,6 +32,19 @@ final class WallpaperSettingsNormalizationTests: XCTestCase {
         XCTAssertEqual(reloaded.themes[0].darkWallpaper, "/wallpapers/dark.jpg")
     }
 
+    func testSpacePinsUseTheUppercaseIdentifierOfMacOS() {
+        let normalized = WallpaperSettings(
+            spacePins: [
+                "aaaaaaaa-0000-0000-0000-000000000001": "/wallpapers/pin.jpg",
+                "bbbbbbbb-0000-0000-0000-000000000002": "relative.jpg",
+            ]
+        ).normalized()
+
+        XCTAssertEqual(normalized.spacePins, [
+            "AAAAAAAA-0000-0000-0000-000000000001": "/wallpapers/pin.jpg",
+        ])
+    }
+
     /// A theme with its own folders keeps its scope: a pin outside those
     /// folders is dropped.
     func testAThemeWithItsOwnFoldersDropsAPinOutsideThoseFolders() {

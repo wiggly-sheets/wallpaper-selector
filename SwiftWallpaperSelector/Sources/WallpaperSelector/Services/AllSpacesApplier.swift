@@ -149,12 +149,14 @@ class AllSpacesApplier {
     ///
     /// The call returns at once, because the work runs on the queue of the
     /// applier. The result is reported through `onResult` on the main actor.
-    func apply(_ imageURL: URL) {
+    func apply(_ imageURL: URL, pins: [String: URL] = [:], spaceIDs: [String] = []) {
         let work = AllSpacesWork(
             store: store,
             storeURL: storeURL,
             backupURL: backupURL,
-            agent: agent
+            agent: agent,
+            pins: pins,
+            spaceIDs: spaceIDs
         )
         Self.workQueue.async { [weak self] in
             let result = work.run(imageURL)
@@ -220,6 +222,10 @@ private struct AllSpacesWork: @unchecked Sendable {
     let storeURL: URL
     let backupURL: URL
     let agent: WallpaperAgent
+    /// The wallpaper a Space keeps, keyed by the id of the Space.
+    let pins: [String: URL]
+    /// The Spaces that get the default wallpaper.
+    let spaceIDs: [String]
 
     /// The number of times the store is written before the apply is given up.
     ///
@@ -252,6 +258,9 @@ private struct AllSpacesWork: @unchecked Sendable {
     private func applyWallpaper(_ imageURL: URL) throws {
         guard FileManager.default.fileExists(atPath: imageURL.path) else {
             throw AllSpacesApplierError.wallpaperNotFound(path: imageURL.path)
+        }
+        for (_, pin) in pins where !FileManager.default.fileExists(atPath: pin.path) {
+            throw AllSpacesApplierError.wallpaperNotFound(path: pin.path)
         }
         guard FileManager.default.fileExists(atPath: storeURL.path) else {
             throw AllSpacesApplierError.storeNotFound(path: storeURL.path)
@@ -291,7 +300,16 @@ private struct AllSpacesWork: @unchecked Sendable {
             // the app from the write of the agent, because the patch of the
             // app writes `LastSet` itself. Upgrade this when macOS can be
             // asked which wallpaper a Space shows.
-            guard store.holdsWallpaper(imageURL, inStoreAt: storeURL) else { continue }
+            let kept = pins.isEmpty
+                ? (store.holdsWallpaper(imageURL, inStoreAt: storeURL)
+                    || store.holdsWallpaperInEverySpace(imageURL, inStoreAt: storeURL))
+                : store.holdsWallpapers(
+                    default: imageURL,
+                    pins: pins,
+                    spaceIDs: spaceIDs,
+                    inStoreAt: storeURL
+                )
+            guard kept else { continue }
             return
         }
         throw AllSpacesApplierError.verificationFailed(attempts: Self.maximumAttempts)
@@ -346,7 +364,18 @@ private struct AllSpacesWork: @unchecked Sendable {
     /// Writes the wallpaper into the store.
     private func patch(_ imageURL: URL) throws {
         do {
-            try store.setWallpaper(imageURL, inStoreAt: storeURL)
+            if pins.isEmpty {
+                try store.setWallpaper(imageURL, inStoreAt: storeURL)
+            } else {
+                var contents = try store.read(at: storeURL)
+                try store.setWallpapers(
+                    default: imageURL,
+                    pins: pins,
+                    spaceIDs: spaceIDs,
+                    in: &contents
+                )
+                try store.write(contents, to: storeURL)
+            }
         } catch let error as WallpaperStoreError {
             throw AllSpacesApplierError.storeFailure(reason: error.errorDescription ?? "")
         }

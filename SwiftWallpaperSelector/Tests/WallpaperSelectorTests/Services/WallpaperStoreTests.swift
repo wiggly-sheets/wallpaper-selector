@@ -653,6 +653,161 @@ final class WallpaperStoreTests: XCTestCase {
         }
     }
 
+    func testEverySpaceKeepsItsOwnWallpaper() throws {
+        let pinnedSpace = "AAAAAAAA-0000-0000-0000-000000000001"
+        let otherSpace = "BBBBBBBB-0000-0000-0000-000000000002"
+        let display = "CCCCCCCC-0000-0000-0000-000000000003"
+        let url = try writeFixture(
+            StoreFixture.store(spaces: [
+                pinnedSpace: ["Default": StoreFixture.container()],
+                otherSpace: ["Displays": [display: StoreFixture.container()]],
+            ])
+        )
+        let pin = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/Pin.jpg")
+        let fallback = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpapers(
+            default: fallback,
+            pins: [pinnedSpace: pin],
+            spaceIDs: [pinnedSpace, otherSpace],
+            inStoreAt: url
+        )
+
+        let store = try WallpaperStore().read(at: url)
+        let global = try XCTUnwrap(store["AllSpacesAndDisplays"] as? [String: Any])
+        XCTAssertEqual(global["Type"] as? String, "idle")
+        XCTAssertNil(global["Desktop"])
+        let pinnedRecord = try XCTUnwrap((store["Spaces"] as? [String: Any])?[pinnedSpace] as? [String: Any])
+        let pinnedContainer = try XCTUnwrap(pinnedRecord["Default"] as? [String: Any])
+        XCTAssertEqual(
+            try configuration(of: pinnedContainer)["url"].flatMap { ($0 as? [String: String])?["relative"] },
+            pin.absoluteString
+        )
+        let otherRecord = try XCTUnwrap((store["Spaces"] as? [String: Any])?[otherSpace] as? [String: Any])
+        let otherContainer = try XCTUnwrap((otherRecord["Displays"] as? [String: Any])?[display] as? [String: Any])
+        XCTAssertEqual(
+            try configuration(of: otherContainer)["url"].flatMap { ($0 as? [String: String])?["relative"] },
+            fallback.absoluteString
+        )
+        XCTAssertTrue(
+            WallpaperStore().holdsWallpapers(
+                default: fallback,
+                pins: [pinnedSpace: pin],
+                spaceIDs: [pinnedSpace, otherSpace],
+                in: store
+            )
+        )
+    }
+
+    func testASpaceWithoutARecordGetsTheDefaultWallpaper() throws {
+        let space = "DDDDDDDD-0000-0000-0000-000000000004"
+        let url = try writeFixture(StoreFixture.store())
+        let fallback = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpapers(
+            default: fallback,
+            pins: [:],
+            spaceIDs: [space],
+            inStoreAt: url
+        )
+
+        let store = try WallpaperStore().read(at: url)
+        let record = try XCTUnwrap((store["Spaces"] as? [String: Any])?[space] as? [String: Any])
+        let container = try XCTUnwrap(record["Default"] as? [String: Any])
+        XCTAssertEqual(
+            try configuration(of: container)["url"].flatMap { ($0 as? [String: String])?["relative"] },
+            fallback.absoluteString
+        )
+        XCTAssertTrue(
+            WallpaperStore().holdsWallpapers(
+                default: fallback,
+                pins: [:],
+                spaceIDs: [space],
+                in: store
+            )
+        )
+    }
+
+    func testAFreshSpaceLooksLikeTheRecordOfMacOS() throws {
+        let space = "FFFFFFFF-0000-0000-0000-000000000006"
+        let display = "CCCCCCCC-0000-0000-0000-000000000003"
+        let url = try writeFixture(
+            StoreFixture.store(displays: [display: StoreFixture.container()])
+        )
+        let fallback = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpapers(
+            default: fallback,
+            pins: [:],
+            spaceIDs: [space],
+            inStoreAt: url
+        )
+
+        let store = try WallpaperStore().read(at: url)
+        let record = try XCTUnwrap((store["Spaces"] as? [String: Any])?[space] as? [String: Any])
+        let defaultContainer = try XCTUnwrap(record["Default"] as? [String: Any])
+        XCTAssertEqual(defaultContainer["Type"] as? String, "individual")
+        XCTAssertNotNil(defaultContainer["Idle"])
+        let displayContainer = try XCTUnwrap((record["Displays"] as? [String: Any])?[display] as? [String: Any])
+        XCTAssertEqual(
+            try configuration(of: displayContainer)["url"].flatMap { ($0 as? [String: String])?["relative"] },
+            fallback.absoluteString
+        )
+        XCTAssertTrue(
+            WallpaperStore().holdsWallpapers(
+                default: fallback,
+                pins: [:],
+                spaceIDs: [space],
+                in: store
+            )
+        )
+    }
+
+    /// Once every Space has a record, macOS can keep the global container
+    /// idle and read the records instead. The old check has to accept that
+    /// store.
+    func testEverySpaceCanHoldTheWallpaperWhileTheGlobalContainerIsIdle() {
+        let image = URL(fileURLWithPath: StoreFixture.imagePath)
+        let spaces: [String: Any] = [
+            "space-a": ["Default": StoreFixture.container()],
+            "space-b": ["Default": StoreFixture.container()],
+        ]
+        var store = StoreFixture.store(spaces: spaces)
+        store["AllSpacesAndDisplays"] = ["Type": "idle", "Idle": StoreFixture.slot(path: StoreFixture.idlePath)]
+        let wallpaperStore = WallpaperStore()
+
+        XCTAssertTrue(wallpaperStore.holdsWallpaperInEverySpace(image, in: store))
+
+        let other = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/Other.jpg")
+        XCTAssertFalse(wallpaperStore.holdsWallpaperInEverySpace(other, in: store))
+    }
+
+    func testASpaceThatDoesNotHoldItsPinIsReported() throws {
+        let space = "EEEEEEEE-0000-0000-0000-000000000005"
+        let url = try writeFixture(StoreFixture.store(spaces: [
+            space: ["Default": StoreFixture.container()],
+        ]))
+        let pin = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/Pin.jpg")
+        let fallback = URL(fileURLWithPath: "/Users/Zeb/Pictures/Wallpapers/New.jpg")
+
+        try WallpaperStore().setWallpapers(
+            default: fallback,
+            pins: [space: pin],
+            spaceIDs: [space],
+            inStoreAt: url
+        )
+        let store = try WallpaperStore().read(at: url)
+
+        XCTAssertFalse(
+            WallpaperStore().holdsWallpapers(
+                default: fallback,
+                pins: [space: fallback],
+                spaceIDs: [space],
+                in: store
+            )
+        )
+    }
+
     func testTheStoreOfTheAgentIsTheKnownPath() {
         XCTAssertEqual(
             WallpaperStore.defaultStoreURL.path,

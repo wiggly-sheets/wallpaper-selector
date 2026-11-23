@@ -15,6 +15,27 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(settings.historyLimit, 20)
     }
 
+    func testSpacePinsSurviveSaveAndLoad() throws {
+        let settings = WallpaperSettings(
+            spacePins: ["AAAAAAAA-0000-0000-0000-000000000001": "/wallpapers/pin.jpg"]
+        )
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(WallpaperSettings.self, from: data)
+
+        XCTAssertEqual(decoded.spacePins, settings.spacePins)
+    }
+
+    func testAnUnknownFieldDoesNotDropTheSpacePins() throws {
+        let data = Data("""
+        {"spacePins":{"aaaaaaaa-0000-0000-0000-000000000001":"/wallpapers/pin.jpg"},"unknown":"value"}
+        """.utf8)
+
+        let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
+
+        XCTAssertEqual(settings.spacePins.count, 1)
+    }
+
     func testEncodesElectronCamelCaseKeys() throws {
         let data = try JSONEncoder().encode(WallpaperSettings(activeThemeID: "theme-1", appearanceDarkThemeID: "theme-2"))
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]

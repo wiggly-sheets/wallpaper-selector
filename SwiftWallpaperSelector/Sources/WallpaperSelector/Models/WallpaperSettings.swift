@@ -16,6 +16,8 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
     public var appearanceDarkThemeID: String?
     public var historyLimit: Int
     public var wallpaperHistory: [String]
+    /// The wallpaper a Space keeps, keyed by the UUID of the Space.
+    public var spacePins: [String: String]
 
     public init(
         folderPaths: [String] = [],
@@ -32,7 +34,8 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         appearanceLightThemeID: String? = nil,
         appearanceDarkThemeID: String? = nil,
         historyLimit: Int = 10,
-        wallpaperHistory: [String] = []
+        wallpaperHistory: [String] = [],
+        spacePins: [String: String] = [:]
     ) {
         self.folderPaths = folderPaths
         self.currentWallpaper = currentWallpaper
@@ -49,6 +52,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         self.appearanceDarkThemeID = appearanceDarkThemeID
         self.historyLimit = historyLimit
         self.wallpaperHistory = wallpaperHistory
+        self.spacePins = spacePins
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -57,7 +61,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         case shortcuts, themes, activeThemeId, matchSystemAppearance
         case allFoldersLightWallpaper, allFoldersDarkWallpaper
         case appearanceLightThemeId, appearanceDarkThemeId
-        case historyLimit, wallpaperHistory
+        case historyLimit, wallpaperHistory, spacePins
     }
 
     public init(from decoder: Decoder) throws {
@@ -153,6 +157,8 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
             history = Array(history.prefix(historyLimit))
         }
         wallpaperHistory = history
+        spacePins = (try? values.decodeIfPresent([String: String].self, forKey: .spacePins))
+            .flatMap { $0 } ?? [:]
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -172,6 +178,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         try values.encodeIfPresent(appearanceDarkThemeID, forKey: .appearanceDarkThemeId)
         try values.encode(historyLimit, forKey: .historyLimit)
         try values.encode(wallpaperHistory, forKey: .wallpaperHistory)
+        try values.encode(spacePins, forKey: .spacePins)
     }
 
     /// The history limits the settings file accepts.
@@ -348,6 +355,15 @@ extension WallpaperSettings {
         normalized.historyLimit = Self.clampHistoryLimit(normalized.historyLimit)
         normalized.wallpaperHistory = Array(
             orderedUnique(wallpaperHistory).prefix(normalized.historyLimit)
+        )
+        // macOS reports the UUID of a Space in upper case. A pin is kept for
+        // the Space it names, so the key is normalized the same way.
+        normalized.spacePins = Dictionary(
+            spacePins.compactMap { id, path in
+                guard path.hasPrefix("/") else { return nil }
+                return (id.uppercased(), URL(fileURLWithPath: path).standardizedFileURL.path)
+            },
+            uniquingKeysWith: { _, latest in latest }
         )
         return normalized
     }
