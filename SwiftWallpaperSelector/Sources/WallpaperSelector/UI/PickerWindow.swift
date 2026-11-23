@@ -74,30 +74,40 @@ struct PickerWindow: View {
                 Button(action: { showingRotationDialog = true }) {
                     Label("Rotation…", systemImage: "arrow.triangle.2.circlepath")
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .help("Rotation settings")
                 .disabled(settingsViewModel.isRotationControlDisabled)
 
                 Button(action: { showingAppearanceDialog = true }) {
                     Label("Appearance…", systemImage: "circle.lefthalf.filled")
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .help("Appearance settings")
 
                 Button(action: { showingFoldersDialog = true }) {
                     Label("Folders…", systemImage: "folder")
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .help("Manage folders")
 
                 Button(action: { showingThemesDialog = true }) {
                     Label("Themes…", systemImage: "paintpalette")
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .help("Manage themes")
 
                 Button(action: {
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
                 }) {
                     Label("Settings", systemImage: "gearshape")
                 }
+                .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .help("Settings")
                 .keyboardShortcut(",", modifiers: [.command])
             }
             .padding(.horizontal, 12)
@@ -105,87 +115,89 @@ struct PickerWindow: View {
             .glassBarBackground()
             .divider()
 
-            ScrollView {
-                VStack(spacing: 0) {
-                    if settingsViewModel.folderPaths.isEmpty {
-                        VStack(spacing: 16) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 40))
-                                .foregroundColor(.secondary)
-                            Text("Choose wallpaper folders")
-                                .font(.title2)
-                            Text("Add folders containing images to set as your wallpaper.")
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(.secondary)
-                            Button(action: { showingFoldersDialog = true }) {
-                                Label("Choose Folders", systemImage: "plus.folder")
+            if settingsViewModel.folderPaths.isEmpty {
+                VStack(spacing: 16) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 40))
+                        .foregroundColor(.secondary)
+                    Text("Choose wallpaper folders")
+                        .font(.title2)
+                    Text("Add folders containing images to set as your wallpaper.")
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(.secondary)
+                    Button(action: { showingFoldersDialog = true }) {
+                        Label("Choose Folders", systemImage: "plus.folder")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if appState.currentThemeImages.isEmpty {
+                            VStack(spacing: 16) {
+                                Image(systemName: "photo")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.secondary)
+                                Text("This theme has no images")
+                                    .font(.title2)
+                                Text("Add folders with supported image formats (.png, .jpg, .jpeg, .webp) to this theme.")
+                                    .multilineTextAlignment(.center)
+                                    .foregroundColor(.secondary)
+                                Button(action: { showingThemesDialog = true }) {
+                                    Label("Edit Theme", systemImage: "paintpalette")
+                                }
+                                .buttonStyle(.borderedProminent)
                             }
-                            .buttonStyle(.borderedProminent)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding()
-                    } else if appState.currentThemeImages.isEmpty {
-                        VStack(spacing: 16) {
-                            Image(systemName: "photo")
-                                .font(.system(size: 40))
-                                .foregroundColor(.secondary)
-                            Text("This theme has no images")
-                                .font(.title2)
-                            Text("Add folders with supported image formats (.png, .jpg, .jpeg, .webp) to this theme.")
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(.secondary)
-                            Button(action: { showingThemesDialog = true }) {
-                                Label("Edit Theme", systemImage: "paintpalette")
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding()
-                    } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 16)], spacing: 16) {
-                            ForEach(appState.currentThemeImages, id: \.self) { url in
-                                WallpaperThumbnail(imageURL: url)
-                                    .frame(width: 100, height: 100)
-                                    .overlay(
-                                        ZStack {
-                                            if appState.isCurrentWallpaper(url.path) {
-                                                RoundedRectangle(cornerRadius: 4)
-                                                    .stroke(Color.accentColor, lineWidth: 2)
-                                                VStack {
-                                                    HStack {
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding()
+                        } else {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 16)], spacing: 16) {
+                                ForEach(appState.currentThemeImages, id: \.self) { url in
+                                    WallpaperThumbnail(imageURL: url)
+                                        .frame(width: 100, height: 100)
+                                        .overlay(
+                                            ZStack {
+                                                if appState.isCurrentWallpaper(url.path) {
+                                                    RoundedRectangle(cornerRadius: 4)
+                                                        .stroke(Color.accentColor, lineWidth: 2)
+                                                    VStack {
+                                                        HStack {
+                                                            Spacer()
+                                                            Image(systemName: "checkmark.circle.fill")
+                                                                .font(.title3)
+                                                                .foregroundColor(Color.accentColor)
+                                                                .glassBadgeBackground()
+                                                                .padding(4)
+                                                        }
                                                         Spacer()
-                                                        Image(systemName: "checkmark.circle.fill")
-                                                            .font(.title3)
-                                                            .foregroundColor(Color.accentColor)
-                                                            .glassBadgeBackground()
-                                                            .padding(4)
                                                     }
-                                                    Spacer()
                                                 }
                                             }
+                                        )
+                                        .onTapGesture {
+                                            appState.setWallpaper(url)
                                         }
-                                    )
-                                    .onTapGesture {
-                                        appState.setWallpaper(url)
-                                    }
-                                    .accessibilityElement(children: .ignore)
-                                    .accessibilityLabel(url.lastPathComponent)
-                                    .accessibilityAddTraits(.isButton)
-                                    .accessibilityAddTraits(
-                                        appState.isCurrentWallpaper(url.path)
-                                            ? .isSelected
-                                            : AccessibilityTraits()
-                                    )
-                                    .accessibilityAction {
-                                        appState.setWallpaper(url)
-                                    }
+                                        .accessibilityElement(children: .ignore)
+                                        .accessibilityLabel(url.lastPathComponent)
+                                        .accessibilityAddTraits(.isButton)
+                                        .accessibilityAddTraits(
+                                            appState.isCurrentWallpaper(url.path)
+                                                ? .isSelected
+                                                : AccessibilityTraits()
+                                        )
+                                        .accessibilityAction {
+                                            appState.setWallpaper(url)
+                                        }
+                                }
                             }
+                            .padding()
                         }
-                        .padding()
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 920, minHeight: 640)
         .sheet(isPresented: $showingRotationDialog) {

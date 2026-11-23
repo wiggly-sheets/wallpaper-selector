@@ -127,14 +127,9 @@ final class MenuBarHostingViewController: NSViewController {
     }
 
     private func openSettings() {
-        let openedSwiftUISettings = NSApp.sendAction(
-            Selector(("showSettingsWindow:")),
-            to: nil,
-            from: nil
-        )
-        if !openedSwiftUISettings {
-            showFallbackSettingsWindow()
-        }
+        // A SwiftUI Settings scene does not open in an accessory app, so the
+        // app hosts the window itself.
+        showFallbackSettingsWindow()
         NSApp.activate(ignoringOtherApps: true)
     }
 
