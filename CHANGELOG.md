@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The menu bar icon now opens a preview popover with wallpaper thumbnails,
+  theme and shuffle controls, rotation and All Spaces settings, and buttons for
+  Settings and the main window. The popover can show every wallpaper in the
+  folder or only the recent wallpapers, and selecting a wallpaper applies it.
+  A right click still opens the full menu.
+
+- A new General setting shows or hides the menu bar icon.
+
+### Changed
+
+- The release ships one disk image per architecture:
+  `WallpaperSelector-<version>-arm64.dmg` for Apple silicon and
+  `WallpaperSelector-<version>-x86_64.dmg` for Intel. The single
+  `WallpaperSelector-<version>.dmg` and its `.dmg.sha256` sidecar are gone.
+  Both disk images are listed in `checksums.txt`.
+
 ## [1.1.0] - 2026-11-23
 
 ### Added

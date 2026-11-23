@@ -75,7 +75,10 @@ brew install --cask wiggly-sheets/homebrew-tap/wallpaper-selector
 
 ### Manual install
 
-1. Download latest `.dmg` from [Releases](https://github.com/wiggly-sheets/wallpaper-selector/releases/latest).
+1. Download the disk image for your Mac from
+   [Releases](https://github.com/wiggly-sheets/wallpaper-selector/releases/latest):
+   `WallpaperSelector-<version>-arm64.dmg` for Apple silicon,
+   `WallpaperSelector-<version>-x86_64.dmg` for Intel.
 2. Open it and drag **Wallpaper Selector** to Applications.
 3. Launch app. On first run, choose one or more wallpaper folders.
 
@@ -358,22 +361,22 @@ make run
 Useful commands:
 
 ```bash
-make app                          # dist/Wallpaper Selector.app
-make verify                       # architecture, SDK, version and signature
+make app                          # dist/Wallpaper Selector-arm64.app and -x86_64.app
+make verify                       # architecture, SDK, version and signature of both bundles
 make install                      # ~/Applications/Wallpaper Selector.app
 make release-artifacts VERSION=1.0.0
 make release-notes VERSION=1.0.0  # preview the changelog section
 make release VERSION=1.0.0        # bump, test, build, verify, commit and tag
 ```
 
-`make release-artifacts` creates a versioned DMG and `.sha256` checksum under
-`release/`, then verifies the checksum. A local `make dmg` and the DMG of the
-release workflow end up the same: a read-only disk image with the Finder window
-layout. The local recipe only moves the compression out of `create-dmg` and
-into the `hdiutil convert` of the Makefile, because `--skip-finalize` leaves a
-writable disk image behind. The layout is driven through AppleScript, so a
-local `make dmg` needs a GUI session; without one it fails with `Failed running
-AppleScript`.
+`make release-artifacts` creates one versioned DMG per architecture and a
+`checksums.txt` under `release/`, then verifies the checksum file. A local
+`make dmg` and the DMGs of the release workflow end up the same: each is a disk
+image with the Finder window layout. The local recipe only moves the
+compression out of `create-dmg` and into the `hdiutil convert` of the Makefile,
+because `--skip-finalize` leaves a writable disk image behind. The layout is
+driven through AppleScript, so a local `make dmg` needs a GUI session; without
+one it fails with `Failed running AppleScript`.
 
 `make test` runs the changelog check before the SwiftPM suite. The changelog
 uses one shape: an `[Unreleased]` section with `Added`, `Changed`,
@@ -394,9 +397,9 @@ or usage data.
 
 ## Releases and Homebrew
 
-Pushing tag `vX.Y.Z` runs release workflow, builds DMG plus SHA-256 checksum,
-and publishes GitHub release. The release notes are the section of
-[CHANGELOG.md](CHANGELOG.md) for the released version. The
+Pushing tag `vX.Y.Z` runs release workflow, builds both disk images plus
+`checksums.txt`, and publishes GitHub release. The release notes are the
+section of [CHANGELOG.md](CHANGELOG.md) for the released version. The
 [wiggly-sheets/homebrew-tap](https://github.com/wiggly-sheets/homebrew-tap)
 repository renders its own cask from its own template and follows the latest
 stable release, so a release needs no manual copy into the tap.

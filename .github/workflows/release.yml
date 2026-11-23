@@ -73,7 +73,7 @@ jobs:
         run: make release-artifacts CONFIGURATION=release VERSION="$VERSION" \
           BUILD_NUMBER="$BUILD_NUMBER" CREATE_DMG_FINALIZE_FLAGS=''
 
-      - name: Verify the built bundle
+      - name: Verify the built bundles
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: make verify VERSION="$VERSION"
@@ -89,7 +89,7 @@ jobs:
             echo "## Checksums"
             echo ""
             echo '```'
-            cat release/*.sha256
+            cat release/checksums.txt
             echo '```'
           } >> release-notes.md
 
@@ -102,5 +102,5 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             release/*.dmg
-            release/*.sha256
+            release/checksums.txt
           fail_on_unmatched_files: true

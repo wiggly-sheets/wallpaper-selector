@@ -32,7 +32,7 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Build the app bundle
+      - name: Build the app bundles
         env:
           VERSION: 0.0.0-ci
           BUILD_NUMBER: 0
@@ -40,8 +40,8 @@ jobs:
 
       # macOS gives an app the current appearance only when its executable
       # records an SDK of 26.0 or newer. `make verify` checks that, the
-      # architecture, the bundle version and the signature.
-      - name: Verify the app bundle
+      # architecture of every bundle, the bundle version and the signature.
+      - name: Verify the app bundles
         env:
           VERSION: 0.0.0-ci
         run: make verify VERSION="$VERSION"
