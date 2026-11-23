@@ -5,34 +5,126 @@ import AppKit
 struct AddFolderView: View {
     let onAdd: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedPaths: Set<String> = []
+
+    private let suggestions: [SuggestedFolder]
+
+    init(onAdd: @escaping (String) -> Void) {
+        self.onAdd = onAdd
+        suggestions = SuggestedFolder.standard
+    }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Add Folder")
-                .font(.headline)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Add Folders")
+                    .font(.headline)
+                Text("Select folders that contain images.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
 
-            Button("Choose Folder...") {
-                let panel = NSOpenPanel()
-                panel.canChooseFiles = false
-                panel.canChooseDirectories = true
-                panel.allowsMultipleSelection = false
-                panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+            Divider()
 
-                if panel.runModal() == .OK, let url = panel.url {
-                    onAdd(url.path)
+            if suggestions.isEmpty {
+                Text("No suggested folders were found.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(suggestions) { folder in
+                    Toggle(isOn: selectionBinding(for: folder.path)) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(folder.name)
+                                Text(folder.path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                .listStyle(.inset)
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button("Browse\u{2026}", action: browse)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    for path in selectedPaths.sorted() {
+                        onAdd(path)
+                    }
                     dismiss()
                 }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedPaths.isEmpty)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            Button("Cancel") {
-                dismiss()
-            }
-            .keyboardShortcut(.escape)
+            .padding()
         }
-        .padding()
-        .frame(width: 400, height: 200)
+        .frame(width: 440, height: 340)
+    }
+
+    private func selectionBinding(for path: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedPaths.contains(path) },
+            set: { isSelected in
+                if isSelected {
+                    selectedPaths.insert(path)
+                } else {
+                    selectedPaths.remove(path)
+                }
+            }
+        )
+    }
+
+    private func browse() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                onAdd(url.path)
+            }
+            dismiss()
+        }
+    }
+}
+
+private struct SuggestedFolder: Identifiable {
+    let name: String
+    let path: String
+
+    var id: String { path }
+
+    /// The picture folders a new user is likely to keep wallpapers in.
+    static var standard: [SuggestedFolder] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            (name: "Wallpapers", path: home + "/Pictures/Wallpapers"),
+            (name: "Pictures", path: home + "/Pictures"),
+            (name: "Downloads", path: home + "/Downloads"),
+            (name: "Desktop", path: home + "/Desktop")
+        ]
+        var isDirectory: ObjCBool = false
+        return candidates.compactMap { candidate in
+            guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { return nil }
+            return SuggestedFolder(name: candidate.name, path: candidate.path)
+        }
     }
 }
 

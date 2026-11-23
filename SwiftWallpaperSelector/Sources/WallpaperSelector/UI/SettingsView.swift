@@ -1,6 +1,17 @@
 import SwiftUI
 import AppKit
 
+// The system Settings window has no sidebar toggle.
+private struct SidebarToggleRemoval: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 14.0, *) {
+            content.toolbar(removing: .sidebarToggle)
+        } else {
+            content
+        }
+    }
+}
+
 // shortcut: the enabled state lives in the view model and is tested there, but no test can see whether this binding is negated, upgrade when a UI test harness exists
 struct SettingsView: View {
     @EnvironmentObject var viewModel: SettingsViewModel
@@ -12,302 +23,38 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(SettingsCategory.allCases, selection: $selectedCategory) { category in
-                Label(category.title, systemImage: category.symbol).tag(category)
+                Label(category.title, systemImage: category.symbol)
+                    .tag(category)
             }
             .listStyle(.sidebar)
             .navigationTitle("Settings")
-            .frame(minWidth: 190, idealWidth: 210)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 210)
+            .modifier(SidebarToggleRemoval())
         } detail: {
             Form {
-
-                if selectedCategory == .general {
-                Section("General") {
-                    Toggle("Launch at Login", isOn: launchAtLoginBinding)
-                        .accessibilityLabel("Launch at login toggle")
-                        .help("Opens Wallpaper Selector when you log in.")
-
-                    if let message = viewModel.launchAtLoginMessage {
-                        HStack {
-                            Label(message, systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .textSelection(.enabled)
-                            Spacer()
-                            Button("Open Login Items…", action: viewModel.openLaunchAtLoginSettings)
-                        }
-                    }
-
-                    Picker("Recent Wallpapers", selection: $viewModel.historyLimit) {
-                        Text("5").tag(5)
-                        Text("10").tag(10)
-                        Text("20").tag(20)
-                    }
-                    .pickerStyle(.radioGroup)
-                    .accessibilityLabel("Recent wallpapers radio group")
-                    .onChange(of: viewModel.historyLimit) { newValue in
-                        viewModel.setHistoryLimit(newValue)
-                    }
-
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text("Settings Location")
-                            Text(viewModel.settingsFolderPath ?? "Application Support")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        Spacer()
-                        Button("Choose…", action: viewModel.chooseSettingsFolder)
-                        if viewModel.settingsFolderPath != nil {
-                            Button("Default", action: viewModel.useDefaultSettingsFolder)
-                        }
-                    }
-
-                    if let errorMessage = viewModel.settingsErrorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .textSelection(.enabled)
-                    }
-
-                    if let errorMessage = viewModel.wallpaperErrorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .textSelection(.enabled)
-                    }
-                }
-                }
-
-
-                if selectedCategory == .appearance {
-                Section("Appearance") {
-                    Picker("Theme Source", selection: $viewModel.themeSource) {
-                        ForEach(ThemeSource.allCases, id: \.self) { source in
-                            Text(source.label).tag(source)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-                    .accessibilityLabel("Theme source radio group")
-                    .onChange(of: viewModel.themeSource) { newValue in
-                        viewModel.setThemeSource(newValue)
-                    }
-
-                    Toggle("Match System Appearance", isOn: $viewModel.matchSystemAppearance)
-                        .accessibilityLabel("Match system appearance toggle")
-                        .onChange(of: viewModel.matchSystemAppearance) { viewModel.setMatchSystemAppearance($0) }
-
-                    Toggle("All Spaces", isOn: $viewModel.allSpaces)
-                        .accessibilityLabel("All spaces toggle")
-                        // The toggle can always be turned off: a setting that
-                        // was stored on a newer macOS must be clearable here.
-                        .disabled(!AllSpacesSupport.isAvailable && !viewModel.allSpaces)
-                        .help(AllSpacesSupport.isAvailable
-                              ? "Puts the wallpaper on every Space"
-                              : "Needs macOS 14 or newer.")
-                        .onChange(of: viewModel.allSpaces) { viewModel.setAllSpaces($0) }
-
-                    Text("Puts the wallpaper on every Space. Needs macOS 14 or newer.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if !viewModel.themes.isEmpty {
-                        Picker("Light Theme", selection: $viewModel.appearanceLightThemeID) {
-                            Text("None").tag(Optional<String>.none as String?)
-                            ForEach(viewModel.themes) { theme in
-                                Text(theme.displayName).tag(Optional(theme.id))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: viewModel.appearanceLightThemeID) { _ in viewModel.persistAppearanceOverrides() }
-
-                        Picker("Dark Theme", selection: $viewModel.appearanceDarkThemeID) {
-                            Text("None").tag(Optional<String>.none as String?)
-                            ForEach(viewModel.themes) { theme in
-                                Text(theme.displayName).tag(Optional(theme.id))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .onChange(of: viewModel.appearanceDarkThemeID) { _ in viewModel.persistAppearanceOverrides() }
-                    }
-
-                    Section("Appearance Overrides (All Folders)") {
-                        Text("When an appearance theme is set, the wallpaper of that appearance is pinned in the Appearance sheet of the main window.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Picker("Light Wallpaper", selection: $viewModel.allFoldersLightWallpaper) {
-                            Text("None").tag(Optional<String>.none as String?)
-                            ForEach(viewModel.allFoldersLightWallpaperImages, id: \.self) { url in
-                                Text(url.lastPathComponent).tag(Optional(url.path))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .disabled(viewModel.isGlobalLightPinDisabled)
-                        .onChange(of: viewModel.allFoldersLightWallpaper) { _ in viewModel.persistAppearanceOverrides() }
-
-                        Picker("Dark Wallpaper", selection: $viewModel.allFoldersDarkWallpaper) {
-                            Text("None").tag(Optional<String>.none as String?)
-                            ForEach(viewModel.allFoldersDarkWallpaperImages, id: \.self) { url in
-                                Text(url.lastPathComponent).tag(Optional(url.path))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .disabled(viewModel.isGlobalDarkPinDisabled)
-                        .onChange(of: viewModel.allFoldersDarkWallpaper) { _ in viewModel.persistAppearanceOverrides() }
-                    }
-                }
-                }
-
-
-                if selectedCategory == .shortcuts {
-                Section("Keyboard Shortcuts") {
-                    ShortcutRecorder(label: "Show Main Window", shortcut: viewModel.shortcuts.showMain) {
-                        viewModel.setShowMainShortcut($0)
-                    }
-                    ShortcutRecorder(label: "Show Preview", shortcut: viewModel.shortcuts.showPreview) {
-                        viewModel.setShowPreviewShortcut($0)
-                    }
-                    ShortcutRecorder(label: "Open Menu Bar Menu", shortcut: viewModel.shortcuts.showMenu) {
-                        viewModel.setShowMenuShortcut($0)
-                    }
-
-                    if let errorMessage = viewModel.hotKeyErrorMessage {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                            .textSelection(.enabled)
-                    }
-                }
-                }
-
-
-                if selectedCategory == .folders {
-                Section("Folders") {
-                    Label("Count: \(viewModel.folderPaths.count)", systemImage: "folder")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    ForEach(viewModel.folderPaths, id: \.self) { path in
-                        HStack {
-                            Text(path)
-                                .font(.subheadline)
-                            Spacer()
-                            Button {
-                                viewModel.removeFolder(path)
-                            } label: {
-                                Image(systemName: "minus.circle")
-                                    .foregroundColor(.red)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove folder")
-                        }
-                    }
-                    .onDelete { indexSet in
-                        // The settings publish synchronously, so the array shrinks
-                        // while the rows are removed. Work on a snapshot.
-                        let paths = indexSet.compactMap { index in
-                            viewModel.folderPaths.indices.contains(index)
-                                ? viewModel.folderPaths[index]
-                                : nil
-                        }
-                        for path in paths {
-                            viewModel.removeFolder(path)
-                        }
-                    }
-
-                    Button(action: {
-                        showingAddFolder = true
-                    }) {
-                        Label("Add Folder", systemImage: "plus.folder")
-                    }
-                    .accessibilityLabel("Add folder button")
-                }
-                }
-
-
-                if selectedCategory == .themes {
-                Section("Themes") {
-                    Label("Count: \(viewModel.themes.count)", systemImage: "tag")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    ForEach(viewModel.themes) { theme in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(theme.displayName)
-                                    .font(.subheadline)
-                                Text("Folders: \(theme.folderPaths.count)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                            Spacer()
-                            Button {
-                                viewModel.removeTheme(id: theme.id)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove theme")
-                        }
-                    }
-                    .onDelete { indexSet in
-                        // The settings publish synchronously, so the array shrinks
-                        // while the rows are removed. Work on a snapshot.
-                        let themes = indexSet.compactMap { index in
-                            viewModel.themes.indices.contains(index)
-                                ? viewModel.themes[index]
-                                : nil
-                        }
-                        for theme in themes {
-                            viewModel.removeTheme(id: theme.id)
-                        }
-                    }
-
-                    Button(action: {
-                        showingAddTheme = true
-                    }) {
-                        Label("Add Theme", systemImage: "plus.app")
-                    }
-                    .accessibilityLabel("Add theme button")
-                }
-                }
-
-
-                if selectedCategory == .rotation {
-                Section("Rotation") {
-                    Picker("Interval", selection: $viewModel.intervalMinutes) {
-                        ForEach(RotationInterval.allCases, id: \.self) { interval in
-                            Text(interval.label).tag(interval)
-                        }
-                    }
-                    .accessibilityLabel("Rotation interval picker")
-                    .disabled(viewModel.isRotationControlDisabled)
-                    .onChange(of: viewModel.intervalMinutes) { viewModel.setInterval($0) }
-
-                    Picker("Action", selection: $viewModel.rotationAction) {
-                        ForEach(viewModel.availableRotationActions, id: \.self) { action in
-                            Text(action.label).tag(action)
-                        }
-                    }
-                    .accessibilityLabel("Rotation action picker")
-                    .disabled(viewModel.isRotationControlDisabled)
-                    .onChange(of: viewModel.rotationAction) { viewModel.setRotationAction($0) }
-                }
-                }
-
-
-                if selectedCategory == .general {
-                    Section {
-                        Text("Changes save automatically.")
-                            .foregroundColor(.secondary)
-                    }
+                switch selectedCategory {
+                case .general:
+                    generalPane
+                case .appearance:
+                    appearancePane
+                case .spaces:
+                    spacesPane
+                case .shortcuts:
+                    shortcutsPane
+                case .folders:
+                    foldersPane
+                case .themes:
+                    themesPane
+                case .rotation:
+                    rotationPane
                 }
             }
             .formStyle(.grouped)
+            .onChange(of: selectedCategory) { category in
+                if category == .spaces {
+                    viewModel.refreshSpaces()
+                }
+            }
             .navigationTitle(selectedCategory.title)
             .frame(minWidth: 520, minHeight: 560)
         }
@@ -330,6 +77,359 @@ struct SettingsView: View {
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
     }
 
+    @ViewBuilder
+    private var generalPane: some View {
+        Section {
+            Toggle("Launch at Login", isOn: launchAtLoginBinding)
+                .accessibilityLabel("Launch at login toggle")
+                .help("Opens Wallpaper Selector when you log in.")
+
+            if let message = viewModel.launchAtLoginMessage {
+                HStack(alignment: .firstTextBaseline) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 12)
+                    Button("Open Login Items\u{2026}", action: viewModel.openLaunchAtLoginSettings)
+                        .controlSize(.small)
+                }
+            }
+
+            Picker("Recent Wallpapers", selection: $viewModel.historyLimit) {
+                Text("5").tag(5)
+                Text("10").tag(10)
+                Text("20").tag(20)
+            }
+            .accessibilityLabel("Recent wallpapers")
+            .onChange(of: viewModel.historyLimit) { newValue in
+                viewModel.setHistoryLimit(newValue)
+            }
+
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Settings Location")
+                    Text(viewModel.settingsFolderPath ?? "Application Support")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 12)
+                HStack(spacing: 8) {
+                    Button("Choose\u{2026}", action: viewModel.chooseSettingsFolder)
+                    if viewModel.settingsFolderPath != nil {
+                        Button("Default", action: viewModel.useDefaultSettingsFolder)
+                    }
+                }
+                .controlSize(.small)
+            }
+
+            if let errorMessage = viewModel.settingsErrorMessage {
+                errorRow(errorMessage)
+            }
+            if let errorMessage = viewModel.wallpaperErrorMessage {
+                errorRow(errorMessage)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var appearancePane: some View {
+        Section {
+            Picker("Theme Source", selection: $viewModel.themeSource) {
+                ForEach(ThemeSource.allCases, id: \.self) { source in
+                    Text(source.label).tag(source)
+                }
+            }
+            .accessibilityLabel("Theme source")
+            .onChange(of: viewModel.themeSource) { newValue in
+                viewModel.setThemeSource(newValue)
+            }
+
+            Toggle("Match System Appearance", isOn: $viewModel.matchSystemAppearance)
+                .accessibilityLabel("Match system appearance toggle")
+                .onChange(of: viewModel.matchSystemAppearance) { viewModel.setMatchSystemAppearance($0) }
+
+            Toggle("All Spaces", isOn: $viewModel.allSpaces)
+                .accessibilityLabel("All spaces toggle")
+                // The toggle can always be turned off: a setting that was
+                // stored on a newer macOS must be clearable here.
+                .disabled(!AllSpacesSupport.isAvailable && !viewModel.allSpaces)
+                .help(AllSpacesSupport.isAvailable
+                      ? "Puts the wallpaper on every Space"
+                      : "Needs macOS 14 or newer.")
+                .onChange(of: viewModel.allSpaces) { viewModel.setAllSpaces($0) }
+
+            if !viewModel.themes.isEmpty {
+                Picker("Light Theme", selection: $viewModel.appearanceLightThemeID) {
+                    Text("None").tag(Optional<String>.none as String?)
+                    ForEach(viewModel.themes) { theme in
+                        Text(theme.displayName).tag(Optional(theme.id))
+                    }
+                }
+                .onChange(of: viewModel.appearanceLightThemeID) { _ in viewModel.persistAppearanceOverrides() }
+
+                Picker("Dark Theme", selection: $viewModel.appearanceDarkThemeID) {
+                    Text("None").tag(Optional<String>.none as String?)
+                    ForEach(viewModel.themes) { theme in
+                        Text(theme.displayName).tag(Optional(theme.id))
+                    }
+                }
+                .onChange(of: viewModel.appearanceDarkThemeID) { _ in viewModel.persistAppearanceOverrides() }
+            }
+        } footer: {
+            if !AllSpacesSupport.isAvailable {
+                Text("All Spaces needs macOS 14 or newer.")
+            }
+        }
+
+        Section {
+            Picker("Light Wallpaper", selection: $viewModel.allFoldersLightWallpaper) {
+                Text("None").tag(Optional<String>.none as String?)
+                ForEach(viewModel.allFoldersLightWallpaperImages, id: \.self) { url in
+                    Text(url.lastPathComponent).tag(Optional(url.path))
+                }
+            }
+            .disabled(viewModel.isGlobalLightPinDisabled)
+            .onChange(of: viewModel.allFoldersLightWallpaper) { _ in viewModel.persistAppearanceOverrides() }
+
+            Picker("Dark Wallpaper", selection: $viewModel.allFoldersDarkWallpaper) {
+                Text("None").tag(Optional<String>.none as String?)
+                ForEach(viewModel.allFoldersDarkWallpaperImages, id: \.self) { url in
+                    Text(url.lastPathComponent).tag(Optional(url.path))
+                }
+            }
+            .disabled(viewModel.isGlobalDarkPinDisabled)
+            .onChange(of: viewModel.allFoldersDarkWallpaper) { _ in viewModel.persistAppearanceOverrides() }
+        } header: {
+            Text("Appearance Overrides")
+        } footer: {
+            Text("When an appearance theme is set, the wallpaper of that appearance is pinned in the Appearance sheet of the main window.")
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutsPane: some View {
+        Section {
+            ShortcutRecorder(label: "Show Main Window", shortcut: viewModel.shortcuts.showMain) {
+                viewModel.setShowMainShortcut($0)
+            }
+            ShortcutRecorder(label: "Show Preview", shortcut: viewModel.shortcuts.showPreview) {
+                viewModel.setShowPreviewShortcut($0)
+            }
+            ShortcutRecorder(label: "Open Menu Bar Menu", shortcut: viewModel.shortcuts.showMenu) {
+                viewModel.setShowMenuShortcut($0)
+            }
+
+            if let errorMessage = viewModel.hotKeyErrorMessage {
+                errorRow(errorMessage)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var foldersPane: some View {
+        Section {
+            if viewModel.folderPaths.isEmpty {
+                Text("No folders added yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(viewModel.folderPaths, id: \.self) { path in
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+                        Text(path)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(path)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 8)
+                        Button {
+                            viewModel.removeFolder(path)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.red)
+                        .help("Remove folder")
+                        .accessibilityLabel("Remove folder \(path)")
+                    }
+                }
+                .onDelete { indexSet in
+                    // The settings publish synchronously, so the array shrinks
+                    // while the rows are removed. Work on a snapshot.
+                    let paths = indexSet.compactMap { index in
+                        viewModel.folderPaths.indices.contains(index)
+                            ? viewModel.folderPaths[index]
+                            : nil
+                    }
+                    for path in paths {
+                        viewModel.removeFolder(path)
+                    }
+                }
+            }
+
+            Button {
+                showingAddFolder = true
+            } label: {
+                Label("Add Folder\u{2026}", systemImage: "plus")
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Add folder button")
+        }
+    }
+
+    @ViewBuilder
+    private var themesPane: some View {
+        Section {
+            if viewModel.themes.isEmpty {
+                Text("No themes added yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(viewModel.themes) { theme in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(theme.displayName)
+                            Text("Folders: \(theme.folderPaths.count)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Button {
+                            viewModel.removeTheme(id: theme.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.red)
+                        .help("Remove theme")
+                        .accessibilityLabel("Remove theme \(theme.displayName)")
+                    }
+                }
+                .onDelete { indexSet in
+                    // The settings publish synchronously, so the array shrinks
+                    // while the rows are removed. Work on a snapshot.
+                    let themes = indexSet.compactMap { index in
+                        viewModel.themes.indices.contains(index)
+                            ? viewModel.themes[index]
+                            : nil
+                    }
+                    for theme in themes {
+                        viewModel.removeTheme(id: theme.id)
+                    }
+                }
+            }
+
+            Button {
+                showingAddTheme = true
+            } label: {
+                Label("Add Theme\u{2026}", systemImage: "plus")
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Add theme button")
+        }
+    }
+
+    @ViewBuilder
+    private var spacesPane: some View {
+        Section {
+            if viewModel.allSpaces {
+                Text("All Spaces is on. Every Space shows the same wallpaper.")
+                    .foregroundStyle(.secondary)
+            } else if viewModel.spaces.isEmpty {
+                Text("No Spaces reported yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(viewModel.spaces) { space in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Desktop \(space.index)")
+                            Text(space.displayName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if space.isCurrent {
+                            Text("Current")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
+                        Spacer(minLength: 12)
+                        SpaceWallpaperPicker(
+                            space: space,
+                            images: spacePinImages(for: space),
+                            currentWallpaper: viewModel.currentWallpaper.map {
+                                URL(fileURLWithPath: $0)
+                            },
+                            selection: spacePinBinding(space)
+                        )
+                    }
+                }
+            }
+        } header: {
+            Text("Spaces")
+        } footer: {
+            Text(
+                viewModel.allSpaces
+                    ? "Turn off All Spaces to keep a wallpaper on one Space."
+                    : "A Space follows the current wallpaper until you pin one. New Spaces use the current wallpaper."
+            )
+        }
+        .disabled(viewModel.allSpaces)
+    }
+
+    private func spacePinBinding(_ space: DesktopSpace) -> Binding<String?> {
+        Binding(
+            get: { viewModel.spacePins[space.id] },
+            set: { viewModel.setSpacePin($0, for: space.id) }
+        )
+    }
+
+    /// The images of every folder, plus the pin of the Space even when its
+    /// folder is gone: a pin that cannot be shown would look like no pin.
+    private func spacePinImages(for space: DesktopSpace) -> [URL] {
+        var images = viewModel.allFolderImages
+        if let pinned = viewModel.spacePins[space.id],
+           !images.contains(where: { $0.path == pinned }) {
+            images.append(URL(fileURLWithPath: pinned))
+        }
+        return images
+    }
+
+    @ViewBuilder
+    private var rotationPane: some View {
+        Section {
+            Picker("Interval", selection: $viewModel.intervalMinutes) {
+                ForEach(RotationInterval.allCases, id: \.self) { interval in
+                    Text(interval.label).tag(interval)
+                }
+            }
+            .accessibilityLabel("Rotation interval picker")
+            .disabled(viewModel.isRotationControlDisabled)
+            .onChange(of: viewModel.intervalMinutes) { viewModel.setInterval($0) }
+
+            Picker("Action", selection: $viewModel.rotationAction) {
+                ForEach(viewModel.availableRotationActions, id: \.self) { action in
+                    Text(action.label).tag(action)
+                }
+            }
+            .accessibilityLabel("Rotation action picker")
+            .disabled(viewModel.isRotationControlDisabled)
+            .onChange(of: viewModel.rotationAction) { viewModel.setRotationAction($0) }
+        }
+    }
+
+    private func errorRow(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.red)
+            .textSelection(.enabled)
+    }
+
     /// The toggle runs the registration itself.
     ///
     /// A change handler on the published value would fire again when the
@@ -344,7 +444,7 @@ struct SettingsView: View {
 }
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case general, appearance, shortcuts, folders, themes, rotation
+    case general, appearance, spaces, shortcuts, folders, themes, rotation
 
     var id: Self { self }
     var title: String { rawValue.capitalized }
@@ -352,6 +452,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape"
         case .appearance: "circle.lefthalf.filled"
+        case .spaces: "rectangle.on.rectangle"
         case .shortcuts: "keyboard"
         case .folders: "folder"
         case .themes: "paintpalette"
