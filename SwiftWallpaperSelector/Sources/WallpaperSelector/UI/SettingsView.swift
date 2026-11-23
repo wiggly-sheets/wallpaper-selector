@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // The system Settings window has no sidebar toggle.
 private struct SidebarToggleRemoval: ViewModifier {
@@ -52,6 +53,26 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .onChange(of: selectedCategory) { category in
                 if category == .spaces {
+                    viewModel.refreshSpaces()
+                }
+            }
+            // The Current badge is stale while the window stays open: macOS
+            // changes the Space without telling this view.
+            .onReceive(
+                NSWorkspace.shared.notificationCenter.publisher(
+                    for: NSWorkspace.activeSpaceDidChangeNotification
+                )
+            ) { _ in
+                if selectedCategory == .spaces {
+                    viewModel.refreshSpaces()
+                }
+            }
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification
+                )
+            ) { _ in
+                if selectedCategory == .spaces {
                     viewModel.refreshSpaces()
                 }
             }
