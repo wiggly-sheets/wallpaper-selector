@@ -12,6 +12,9 @@ final class TrayPopoverViewModel: ObservableObject {
     @Published private(set) var allSpaces = false
     @Published private(set) var matchSystemAppearance = false
     @Published private(set) var currentWallpaperPath: String?
+    @Published private(set) var recentWallpaperPaths: [String] = []
+    /// The grid shows the recent wallpapers instead of every wallpaper.
+    @Published var showsRecentOnly = false
     @Published private(set) var isRotationRunning = false
     /// The app is changing a wallpaper, so the buttons must grey out.
     @Published private(set) var isBusy = false
@@ -45,6 +48,17 @@ final class TrayPopoverViewModel: ObservableObject {
             .store(in: &cancellables)
 
         syncFromState(appState.settings)
+    }
+
+    /// The wallpapers the grid shows. A recent entry whose file is gone is
+    /// skipped, so the grid only offers files that can be put on the screen.
+    var displayedImages: [URL] {
+        guard showsRecentOnly else { return images }
+        return recentWallpaperPaths.compactMap { path in
+            FileManager.default.fileExists(atPath: path)
+                ? URL(fileURLWithPath: path)
+                : nil
+        }
     }
 
     var foldersTitle: String {
@@ -142,5 +156,6 @@ final class TrayPopoverViewModel: ObservableObject {
         allSpaces = settings.allSpaces
         matchSystemAppearance = settings.matchSystemAppearance
         currentWallpaperPath = settings.currentWallpaper
+        recentWallpaperPaths = settings.wallpaperHistory
     }
 }

@@ -18,6 +18,8 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
     public var wallpaperHistory: [String]
     /// The wallpaper a Space keeps, keyed by the UUID of the Space.
     public var spacePins: [String: String]
+    /// Whether the menu bar icon is shown.
+    public var showMenuBarItem: Bool
 
     public init(
         folderPaths: [String] = [],
@@ -35,7 +37,8 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         appearanceDarkThemeID: String? = nil,
         historyLimit: Int = 10,
         wallpaperHistory: [String] = [],
-        spacePins: [String: String] = [:]
+        spacePins: [String: String] = [:],
+        showMenuBarItem: Bool = true
     ) {
         self.folderPaths = folderPaths
         self.currentWallpaper = currentWallpaper
@@ -53,6 +56,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         self.historyLimit = historyLimit
         self.wallpaperHistory = wallpaperHistory
         self.spacePins = spacePins
+        self.showMenuBarItem = showMenuBarItem
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -61,7 +65,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         case shortcuts, themes, activeThemeId, matchSystemAppearance
         case allFoldersLightWallpaper, allFoldersDarkWallpaper
         case appearanceLightThemeId, appearanceDarkThemeId
-        case historyLimit, wallpaperHistory, spacePins
+        case historyLimit, wallpaperHistory, spacePins, showMenuBarItem
     }
 
     public init(from decoder: Decoder) throws {
@@ -159,6 +163,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         wallpaperHistory = history
         spacePins = (try? values.decodeIfPresent([String: String].self, forKey: .spacePins))
             .flatMap { $0 } ?? [:]
+        showMenuBarItem = decodeValue(Bool.self, .showMenuBarItem, default: true)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -179,6 +184,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         try values.encode(historyLimit, forKey: .historyLimit)
         try values.encode(wallpaperHistory, forKey: .wallpaperHistory)
         try values.encode(spacePins, forKey: .spacePins)
+        try values.encode(showMenuBarItem, forKey: .showMenuBarItem)
     }
 
     /// The history limits the settings file accepts.

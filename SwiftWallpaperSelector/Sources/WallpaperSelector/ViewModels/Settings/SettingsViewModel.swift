@@ -41,6 +41,8 @@ final class SettingsViewModel: ObservableObject {
     /// The wallpaper a Space keeps, keyed by the UUID of the Space.
     @Published var spacePins: [String: String] = [:]
 
+    @Published var showMenuBarItem: Bool = true
+
     /// The Spaces of the Mac, in the order Mission Control shows them.
     @Published private(set) var spaces: [DesktopSpace] = []
 
@@ -356,6 +358,14 @@ final class SettingsViewModel: ObservableObject {
             } else {
                 newSettings.spacePins.removeValue(forKey: spaceID.uppercased())
             }
+            settings = newSettings
+        }
+    }
+
+    func setShowMenuBarItem(_ enabled: Bool) {
+        appState.updateSettings { settings in
+            var newSettings = settings
+            newSettings.showMenuBarItem = enabled
             settings = newSettings
         }
     }
@@ -685,6 +695,7 @@ final class SettingsViewModel: ObservableObject {
         historyLimit = settings.historyLimit
         currentWallpaper = settings.currentWallpaper
         spacePins = settings.spacePins
+        showMenuBarItem = settings.showMenuBarItem
 
         appearanceLightThemeID = settings.appearanceLightThemeID
         appearanceDarkThemeID = settings.appearanceDarkThemeID

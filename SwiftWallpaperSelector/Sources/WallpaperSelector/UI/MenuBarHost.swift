@@ -123,7 +123,7 @@ final class MenuBarHostingViewController: NSViewController {
                 appState: appState
             )
         }
-        popoverController?.showWindow(nil)
+        popoverController?.toggle()
     }
 
     private func openSettings() {

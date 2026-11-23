@@ -105,6 +105,11 @@ struct SettingsView: View {
                 .accessibilityLabel("Launch at login toggle")
                 .help("Opens Wallpaper Selector when you log in.")
 
+            Toggle("Show Menu Bar Icon", isOn: $viewModel.showMenuBarItem)
+                .accessibilityLabel("Show menu bar icon toggle")
+                .help("Shows the icon in the menu bar.")
+                .onChange(of: viewModel.showMenuBarItem) { viewModel.setShowMenuBarItem($0) }
+
             if let message = viewModel.launchAtLoginMessage {
                 HStack(alignment: .firstTextBaseline) {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
@@ -152,6 +157,8 @@ struct SettingsView: View {
             if let errorMessage = viewModel.wallpaperErrorMessage {
                 errorRow(errorMessage)
             }
+        } footer: {
+            Text("When the icon is hidden, open Wallpaper Selector again to show the main window.")
         }
     }
 

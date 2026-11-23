@@ -63,26 +63,46 @@ final class MenuBarController: NSObject {
 
     func showMenu() {
         updateMenu()
-        guard let button = statusItem?.button, let menu = statusItem?.menu else { return }
+        guard let button = statusItem?.button else { return }
         NSApp.activate(ignoringOtherApps: true)
         // Anchor the menu at the bottom-left of the status item so it drops
         // below the menu bar instead of opening above the screen edge.
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
+        menu.menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: button)
     }
 
     private func createStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem?.isVisible = viewModel.showsMenuBarItem
         if let button = statusItem?.button {
             button.image = NSImage(
                 systemSymbolName: "photo.on.rectangle",
                 accessibilityDescription: "Wallpaper Selector"
             )
+            button.toolTip = "Wallpaper Selector"
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        statusItem?.menu = menu.menu
         updateMenu()
     }
 
+    /// A left click opens the preview popover; a right click opens the full
+    /// menu. The status item has no menu of its own, because a menu would
+    /// swallow the click before the action runs.
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showMenu()
+        } else {
+            onShowPreview?()
+        }
+    }
+
     private func observeViewModelChanges() {
+        viewModel.$showsMenuBarItem
+            .removeDuplicates()
+            .sink { [weak self] isVisible in self?.statusItem?.isVisible = isVisible }
+            .store(in: &cancellables)
+
         viewModel.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.scheduleMenuUpdate() }

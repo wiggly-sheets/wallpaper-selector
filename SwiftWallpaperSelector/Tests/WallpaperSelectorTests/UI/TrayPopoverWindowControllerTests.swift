@@ -90,6 +90,33 @@ final class TrayPopoverWindowControllerTests: XCTestCase {
         XCTAssertEqual(origin.y, 1080 - 300)
     }
 
+    /// A status item without a position (the system can hide it) must not
+    /// put the popover in the corner of the screen.
+    func testThePopoverFallsBackToTheRightEdgeWhenTheStatusItemHasNoPosition() {
+        let statusItemWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1920, height: 24),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let contentView = NSView(frame: .zero)
+        statusItemWindow.contentView = contentView
+        // A hidden status item still reports a small icon at the origin.
+        let icon = NSView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
+        contentView.addSubview(icon)
+
+        let origin = TrayPopoverWindowController.origin(
+            for: icon,
+            in: statusItemWindow,
+            screenFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            width: 360,
+            height: 300
+        )
+
+        XCTAssertEqual(origin.x, 1560)
+        XCTAssertEqual(origin.y, 780)
+    }
+
     /// More wallpapers make the content taller, so the popover is taller.
     func testThePopoverIsTallerWithMoreWallpapers() async throws {
         let (controller, context, appState) = try makeController()

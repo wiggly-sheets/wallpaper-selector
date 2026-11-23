@@ -12,17 +12,16 @@ struct TrayPopoverView: View {
         ScrollView {
             VStack(spacing: 10) {
                 headerView
-                themeSelector
+                themeRow
                 shuffleControls
                 gridView
                 Divider()
-                autoRotateSection
-                allSpacesSection
+                footerControls
                 errorCaption
             }
-            .padding(8)
+            .padding(12)
         }
-        .frame(width: 300)
+        .frame(width: 360)
         .onAppear {
             // Files can be added or removed while the popover is closed.
             viewModel.refreshImagesFromDisk()
@@ -50,7 +49,18 @@ struct TrayPopoverView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            Spacer()
+            Spacer(minLength: 8)
+
+            Picker("Wallpaper list", selection: $viewModel.showsRecentOnly) {
+                Text("All").tag(false)
+                Text("Recent").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(width: 108)
+            .help("Show all or recent wallpapers")
+            .accessibilityLabel("Show all or recent wallpapers")
 
             Button(action: viewModel.openSettings) {
                 Image(systemName: "gearshape")
@@ -58,9 +68,11 @@ struct TrayPopoverView: View {
             .buttonStyle(.borderless)
 
             Button(action: viewModel.showMainWindow) {
-                Text("Open")
+                Image(systemName: "macwindow")
             }
             .buttonStyle(.borderless)
+            .help("Open main window")
+            .accessibilityLabel("Open main window")
         }
     }
 
@@ -96,85 +108,93 @@ struct TrayPopoverView: View {
     }
 
 
-    private var shuffleControls: some View {
+    /// The active theme and its actions, on one line to keep the popover
+    /// short.
+    private var themeRow: some View {
         HStack(spacing: 4) {
-            rotateButton("←", label: "Previous wallpaper", enabled: shuffleEnabled, action: viewModel.previous)
-            rotateButton("↺", label: "Shuffle wallpaper", enabled: shuffleEnabled, action: viewModel.shuffle)
-            rotateButton("→", label: "Next wallpaper", enabled: shuffleEnabled, action: viewModel.next)
+            themeSelector
+            Spacer(minLength: 4)
+            iconButton("chevron.left", label: "Previous theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themePrevious)
+            iconButton("shuffle", label: "Shuffle theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeShuffle)
+            iconButton("chevron.right", label: "Next theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeNext)
+        }
+    }
+
+
+    private var shuffleControls: some View {
+        HStack(spacing: 12) {
+            iconButton("backward.fill", label: "Previous wallpaper", enabled: shuffleEnabled, action: viewModel.previous)
+            iconButton("shuffle", label: "Shuffle wallpaper", enabled: shuffleEnabled, action: viewModel.shuffle)
+            iconButton("forward.fill", label: "Next wallpaper", enabled: shuffleEnabled, action: viewModel.next)
         }
         .frame(maxWidth: .infinity)
     }
 
     private var shuffleEnabled: Bool {
-        !viewModel.images.isEmpty && !viewModel.isBusy
+        !viewModel.displayedImages.isEmpty && !viewModel.isBusy
     }
 
 
     private var gridView: some View {
+        let images = viewModel.displayedImages
         // The grid scrolls in its own area, so a long list of wallpapers
         // does not make the popover taller than it has to be.
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), spacing: 8)], spacing: 8) {
-                ForEach(viewModel.images, id: \.self) { url in
-                    WallpaperThumbnail(imageURL: url)
-                        .overlay(alignment: .bottomTrailing) {
-                            if url.path == viewModel.currentWallpaperPath {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.accentColor)
-                                    .padding(4)
-                            }
-                        }
-                        .onTapGesture {
-                            viewModel.selectWallpaper(url)
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(url.lastPathComponent)
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAddTraits(
-                            url.path == viewModel.currentWallpaperPath
-                                ? .isSelected
-                                : AccessibilityTraits()
+        return ScrollView {
+            if images.isEmpty {
+                Text(viewModel.showsRecentOnly
+                     ? "No recent wallpapers yet."
+                     : "No wallpapers in this folder.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 100, maximum: 100), spacing: 8)],
+                    spacing: 8
+                ) {
+                    ForEach(images, id: \.self) { url in
+                        TrayWallpaperTile(
+                            url: url,
+                            isCurrent: url.path == viewModel.currentWallpaperPath,
+                            select: { viewModel.selectWallpaper(url) }
                         )
-                        .accessibilityAction {
-                            viewModel.selectWallpaper(url)
-                        }
+                    }
                 }
+                .padding(4)
             }
-            .padding(8)
         }
-        .frame(maxHeight: 280)
+        .frame(maxHeight: 300)
     }
 
 
-    private var autoRotateSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Auto-Rotate")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-
-            HStack {
-                Picker("Interval", selection: intervalBinding) {
-                    ForEach(RotationInterval.allCases, id: \.self) { interval in
-                        Text(interval.label).tag(interval)
-                    }
-                }
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                // The rotation cannot run while the appearance is matched.
-                .disabled(viewModel.isRotationControlDisabled)
-                .frame(maxWidth: .infinity)
-
-                Spacer()
-
-                // The wallpaper controls are in the top row. This row holds
-                // the theme controls only.
-                HStack(spacing: 2) {
-                    rotateButton("≪", label: "Previous theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themePrevious)
-                    rotateButton("◊", label: "Shuffle theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeShuffle)
-                    rotateButton("≫", label: "Next theme", enabled: viewModel.isThemeActionEnabled, action: viewModel.themeNext)
+    /// The rotation and All Spaces controls, on one line.
+    private var footerControls: some View {
+        HStack(spacing: 8) {
+            Picker("Rotate", selection: intervalBinding) {
+                ForEach(RotationInterval.allCases, id: \.self) { interval in
+                    Text(interval.label).tag(interval)
                 }
             }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .controlSize(.small)
+            // The rotation cannot run while the appearance is matched.
+            .disabled(viewModel.isRotationControlDisabled)
+            .frame(width: 150)
+            .help("Rotate wallpapers")
+
+            Spacer(minLength: 4)
+
+            Toggle("All Spaces", isOn: allSpacesBinding)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                // The toggle can always be turned off: a setting that was
+                // stored on a newer macOS must be clearable here.
+                .disabled(!AllSpacesSupport.isAvailable && !viewModel.allSpaces)
+                .help(AllSpacesSupport.isAvailable
+                      ? "Puts the wallpaper on every Space"
+                      : "Needs macOS 14 or newer.")
         }
     }
 
@@ -186,25 +206,6 @@ struct TrayPopoverView: View {
     }
 
 
-    private var allSpacesSection: some View {
-        Toggle(isOn: allSpacesBinding) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("All Spaces")
-                Text("Put the wallpaper on every Space")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        // The toggle can always be turned off: a setting that was stored on
-        // a newer macOS must be clearable here.
-        .disabled(!AllSpacesSupport.isAvailable && !viewModel.allSpaces)
-        .help(AllSpacesSupport.isAvailable
-              ? "Puts the wallpaper on every Space"
-              : "Needs macOS 14 or newer.")
-    }
-
     private var allSpacesBinding: Binding<Bool> {
         Binding(
             get: { viewModel.allSpaces },
@@ -213,15 +214,52 @@ struct TrayPopoverView: View {
     }
 
 
-    private func rotateButton(_ title: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ symbol: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 22, height: 22)
         }
         .buttonStyle(.borderless)
         .disabled(!enabled)
         .help(label)
         .accessibilityLabel(label)
+    }
+}
+
+
+/// A preview tile with the name of the wallpaper under it.
+private struct TrayWallpaperTile: View {
+    let url: URL
+    let isCurrent: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            VStack(alignment: .leading, spacing: 3) {
+                WallpaperThumbnail(imageURL: url)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .bottomTrailing) {
+                        if isCurrent {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.white, Color.accentColor)
+                                .padding(4)
+                        }
+                    }
+                Text(url.deletingPathExtension().lastPathComponent)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(width: 100, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(url.lastPathComponent)
+        .accessibilityLabel(url.lastPathComponent)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isCurrent ? .isSelected : AccessibilityTraits())
     }
 }
 
@@ -253,6 +291,6 @@ struct TrayPopoverView_Previews: PreviewProvider {
 
         return TrayPopoverView()
             .environmentObject(TrayPopoverViewModel(appState: appState))
-            .frame(width: 300)
+            .frame(width: 360)
     }
 }

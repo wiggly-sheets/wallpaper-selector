@@ -17,7 +17,7 @@ final class PopoverWindow: NSWindow {
 @MainActor
 final class TrayPopoverWindowController: NSWindowController {
     /// The width of the popover. The height follows the content.
-    static let popoverWidth: CGFloat = 300
+    static let popoverWidth: CGFloat = 360
 
     /// The corner radius of the glass surface of the popover.
     static let popoverCornerRadius: CGFloat = 16
@@ -74,6 +74,12 @@ final class TrayPopoverWindowController: NSWindowController {
             name: NSWindow.didResignKeyNotification,
             object: window
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleOpenSettingsWindow),
+            name: .openSettingsWindow,
+            object: nil
+        )
         observeContentChanges()
     }
 
@@ -126,6 +132,15 @@ final class TrayPopoverWindowController: NSWindowController {
         NotificationCenter.default.removeObserver(self)
     }
 
+
+    /// Shows the popover, or hides it when it is already open.
+    func toggle() {
+        if window?.isVisible == true {
+            hide()
+        } else {
+            showWindow(nil)
+        }
+    }
 
     override func showWindow(_ sender: Any?) {
         let screen = statusItem?.button?.window?.screen ?? NSScreen.main ?? NSScreen.screens.first
@@ -200,6 +215,11 @@ final class TrayPopoverWindowController: NSWindowController {
     ) -> CGPoint {
         let inWindow = button.convert(button.bounds, to: nil)
         let onScreen = window.convertToScreen(inWindow)
+        // A status item that the system hid has no position. Put the
+        // popover at the right edge rather than in the corner of the screen.
+        guard onScreen.width > 0, onScreen.midX > screenFrame.minX + 32 else {
+            return CGPoint(x: screenFrame.maxX - width, y: screenFrame.maxY - height)
+        }
         return CGPoint(x: onScreen.midX - width / 2, y: screenFrame.maxY - height)
     }
 
@@ -222,6 +242,10 @@ final class TrayPopoverWindowController: NSWindowController {
 
     @objc private func windowDidResignKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === self.window else { return }
+        hide()
+    }
+
+    @objc private func handleOpenSettingsWindow() {
         hide()
     }
 
@@ -274,6 +298,12 @@ final class TrayPopoverWindowController: NSWindowController {
 
     private func hideIfOutside(screenPoint: NSPoint) {
         guard let window, window.isVisible, !window.frame.contains(screenPoint) else { return }
+        // The status item toggles the popover. Hiding it here would reopen it
+        // again when the click reaches the status item action.
+        if let button = statusItem?.button, let buttonWindow = button.window {
+            let pointInButton = button.convert(buttonWindow.convertPoint(fromScreen: screenPoint), from: nil)
+            if button.bounds.contains(pointInButton) { return }
+        }
         hide()
     }
 

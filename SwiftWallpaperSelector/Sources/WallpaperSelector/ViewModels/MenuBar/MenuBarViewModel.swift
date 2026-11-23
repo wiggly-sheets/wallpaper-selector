@@ -17,6 +17,7 @@ final class MenuBarViewModel: ObservableObject {
     @Published private(set) var matchSystemAppearance = false
     @Published private(set) var lastWallpaperError: String?
     @Published private(set) var hotKeyErrorMessage: String?
+    @Published private(set) var showsMenuBarItem = true
 
     private let appState: AppState
     private var cancellables = Set<AnyCancellable>()
@@ -155,6 +156,7 @@ final class MenuBarViewModel: ObservableObject {
         rotationAction = settings.rotationAction
         allSpaces = settings.allSpaces
         matchSystemAppearance = settings.matchSystemAppearance
+        showsMenuBarItem = settings.showMenuBarItem
         menuTitle = settings.activeThemeID
             .flatMap { id in settings.themes.first { $0.id == id }?.displayName }
             ?? "All Folders"

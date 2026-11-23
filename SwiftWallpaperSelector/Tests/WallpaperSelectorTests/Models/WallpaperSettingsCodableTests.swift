@@ -26,6 +26,18 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(decoded.spacePins, settings.spacePins)
     }
 
+    func testTheMenuBarItemIsShownByDefaultAndItsVisibilitySurvivesSaveAndLoad() throws {
+        let legacy = try JSONDecoder().decode(
+            WallpaperSettings.self,
+            from: Data(#"{"folderPaths":["/wallpapers"]}"#.utf8)
+        )
+        XCTAssertTrue(legacy.showMenuBarItem)
+
+        let data = try JSONEncoder().encode(WallpaperSettings(showMenuBarItem: false))
+        let decoded = try JSONDecoder().decode(WallpaperSettings.self, from: data)
+        XCTAssertFalse(decoded.showMenuBarItem)
+    }
+
     func testAnUnknownFieldDoesNotDropTheSpacePins() throws {
         let data = Data("""
         {"spacePins":{"aaaaaaaa-0000-0000-0000-000000000001":"/wallpapers/pin.jpg"},"unknown":"value"}
