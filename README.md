@@ -134,6 +134,22 @@ On macOS 13 the wallpaper stays on the current Space.
 The app needs no Accessibility permission, and it opens no System Settings
 window.
 
+### Wallpaper for a Space
+
+The Spaces pane in the Settings window lists every desktop of every display.
+A Space without a pin follows the current wallpaper, also when the rotation
+changes it. A pin keeps one image on that Space; the other Spaces keep
+following the current wallpaper.
+
+A pin writes the wallpaper plan of every Space at once, so the user does not
+wait for the next rotation. A Space that macOS creates later has no record in
+the store yet; the app writes the current wallpaper for it when it appears.
+The check runs every 20 seconds and when the app becomes active.
+
+All Spaces and per-Space pins cannot be active together: All Spaces puts one
+wallpaper on every Space. The Spaces pane is disabled while All Spaces is on,
+and the pins apply again when it is turned off.
+
 ## Usage
 
 ### Menu bar
