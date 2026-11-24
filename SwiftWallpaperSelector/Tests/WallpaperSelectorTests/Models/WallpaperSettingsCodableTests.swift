@@ -15,6 +15,22 @@ final class WallpaperSettingsCodableTests: XCTestCase {
         XCTAssertEqual(settings.historyLimit, 20)
     }
 
+    /// A source the app does not know must not take the file with it, and the
+    /// sources that are there have to survive the next save.
+    func testAnUnknownSourceIsDroppedAndTheKnownSourcesSurviveTheRoundTrip() throws {
+        let data = Data("""
+        {"folderPaths":["/wallpapers"],"wallpaperSources":["wallhaven","unsplash","wikimedia"]}
+        """.utf8)
+
+        let settings = try JSONDecoder().decode(WallpaperSettings.self, from: data)
+        XCTAssertEqual(settings.wallpaperSources, [.wallhaven, .wikimedia])
+
+        let written = try JSONEncoder().encode(settings.normalized())
+        let nextLaunch = try JSONDecoder().decode(WallpaperSettings.self, from: written)
+
+        XCTAssertEqual(nextLaunch.wallpaperSources, [.wallhaven, .wikimedia])
+    }
+
     func testSpacePinsSurviveSaveAndLoad() throws {
         let settings = WallpaperSettings(
             spacePins: ["AAAAAAAA-0000-0000-0000-000000000001": "/wallpapers/pin.jpg"]

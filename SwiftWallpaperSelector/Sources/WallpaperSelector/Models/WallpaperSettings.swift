@@ -20,6 +20,13 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
     public var spacePins: [String: String]
     /// Whether the menu bar icon is shown.
     public var showMenuBarItem: Bool
+    /// The sources a download takes wallpapers from.
+    public var wallpaperSources: [WallpaperSource]
+    /// Whether the app downloads wallpapers once a day on its own.
+    public var dailyDownloadEnabled: Bool
+    /// The day of the last automatic download, as `yyyy-MM-dd`. The app
+    /// downloads once per day, also across restarts.
+    public var lastDailyDownloadDay: String?
 
     public init(
         folderPaths: [String] = [],
@@ -38,7 +45,10 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         historyLimit: Int = 10,
         wallpaperHistory: [String] = [],
         spacePins: [String: String] = [:],
-        showMenuBarItem: Bool = true
+        showMenuBarItem: Bool = true,
+        wallpaperSources: [WallpaperSource] = [],
+        dailyDownloadEnabled: Bool = false,
+        lastDailyDownloadDay: String? = nil
     ) {
         self.folderPaths = folderPaths
         self.currentWallpaper = currentWallpaper
@@ -57,6 +67,9 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         self.wallpaperHistory = wallpaperHistory
         self.spacePins = spacePins
         self.showMenuBarItem = showMenuBarItem
+        self.wallpaperSources = wallpaperSources
+        self.dailyDownloadEnabled = dailyDownloadEnabled
+        self.lastDailyDownloadDay = lastDailyDownloadDay
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -66,6 +79,7 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         case allFoldersLightWallpaper, allFoldersDarkWallpaper
         case appearanceLightThemeId, appearanceDarkThemeId
         case historyLimit, wallpaperHistory, spacePins, showMenuBarItem
+        case wallpaperSources, dailyDownloadEnabled, lastDailyDownloadDay
     }
 
     public init(from decoder: Decoder) throws {
@@ -164,6 +178,12 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         spacePins = (try? values.decodeIfPresent([String: String].self, forKey: .spacePins))
             .flatMap { $0 } ?? [:]
         showMenuBarItem = decodeValue(Bool.self, .showMenuBarItem, default: true)
+        // An unknown source is dropped, so a value the app does not know
+        // cannot stop the whole file from loading.
+        wallpaperSources = LenientDecoding.stringArray(from: values, forKey: .wallpaperSources)
+            .compactMap(WallpaperSource.init(rawValue:))
+        dailyDownloadEnabled = decodeValue(Bool.self, .dailyDownloadEnabled, default: false)
+        lastDailyDownloadDay = decodeOptional(String.self, .lastDailyDownloadDay)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -185,6 +205,9 @@ public struct WallpaperSettings: Codable, Equatable, Sendable {
         try values.encode(wallpaperHistory, forKey: .wallpaperHistory)
         try values.encode(spacePins, forKey: .spacePins)
         try values.encode(showMenuBarItem, forKey: .showMenuBarItem)
+        try values.encode(wallpaperSources, forKey: .wallpaperSources)
+        try values.encode(dailyDownloadEnabled, forKey: .dailyDownloadEnabled)
+        try values.encodeIfPresent(lastDailyDownloadDay, forKey: .lastDailyDownloadDay)
     }
 
     /// The history limits the settings file accepts.
@@ -356,6 +379,11 @@ extension WallpaperSettings {
         if let menuShortcut = normalized.shortcuts.showMenu,
            menuShortcut == normalized.shortcuts.showMain || menuShortcut == normalized.shortcuts.showPreview {
             normalized.shortcuts.showMenu = nil
+        }
+
+        var seenSources = Set<WallpaperSource>()
+        normalized.wallpaperSources = wallpaperSources.filter {
+            seenSources.insert($0).inserted
         }
 
         normalized.historyLimit = Self.clampHistoryLimit(normalized.historyLimit)
