@@ -38,6 +38,7 @@ final class AppCoordinator: ObservableObject {
     /// The Spaces that were on the Mac the last time the plan was written.
     private var knownSpaceIDs: Set<String>
     private var spaceCheckTimer: Timer?
+    private var dailyDownloadService: DailyDownloadService?
 
     convenience init() {
         self.init(
@@ -167,6 +168,18 @@ final class AppCoordinator: ObservableObject {
         if !previousSettings.allSpaces && !previousSettings.spacePins.isEmpty {
             Task { @MainActor [weak self] in self?.applySpaceWallpapers() }
         }
+
+        // The automatic download is off by default. The service reads the
+        // setting on every tick, so switching it on needs no extra wiring.
+        let dailyService = DailyDownloadService(
+            settingsManager: settingsManager,
+            appState: appState,
+            reportError: { [weak self] message in
+                self?.rotationService.reportWallpaperError(message)
+            }
+        )
+        dailyDownloadService = dailyService
+        dailyService.start()
 
         NotificationCenter.default.addObserver(
             self,
