@@ -8,7 +8,7 @@
 
   <p>
     A native macOS menu-bar app for picking, rotating, and organizing local wallpapers.<br/>
-    No Electron. No network. Your wallpaper folders stay on your Mac.
+    No Electron. Downloads are opt-in. Your wallpaper folders stay on your Mac.
   </p>
 
   <p>
@@ -53,6 +53,11 @@ and dark appearance choose different wallpapers.
 - Menu-bar and Settings error reporting for failed wallpaper changes, for
   settings files that could not be written, and for shortcuts that another app
   already owns
+- Optional wallpaper downloads from Wallhaven, Bing Daily, and Wikimedia
+  Commons into a local folder that the app rotates like any other folder
+- Browse window for the checked sources: one tap downloads a wallpaper and
+  sets it, and an optional daily download fetches new wallpapers once a day
+  (off by default)
 - JSON settings, recent-wallpaper history, and direct external-settings sync
 - Unreadable settings files are kept as `settings.json.corrupt` instead of
   being overwritten
@@ -261,8 +266,9 @@ control stays reachable.
 The main window shows the picker: a thumbnail grid of the images in the
 active theme, with the current wallpaper marked. The toolbar has the theme
 menu, the All Spaces switch, the previous, shuffle and next buttons, and
-buttons for the rotation, appearance, folders and themes sheets, and a button
-that opens the Settings window. The appearance sheet sets the theme used in
+buttons for the rotation, appearance, folders and themes sheets, a globe
+button that opens the browse window, and a button that opens the Settings
+window. The appearance sheet sets the theme used in
 light and in dark appearance and pins a wallpaper for each of them. The light
 pin is stored in the light appearance theme and the dark pin in the dark
 appearance theme, because that is the scope the app reads a pin from. Without
@@ -274,7 +280,7 @@ folders.
 
 ### Settings window
 
-The Settings window has six panes. Changes save automatically. The app theme
+The Settings window has seven panes. Changes save automatically. The app theme
 in the Appearance pane applies to the running app and is not saved.
 
 - General: launch at login, the number of recent wallpapers to remember
@@ -291,6 +297,8 @@ in the Appearance pane applies to the running app and is not saved.
 - Shortcuts: Show Main Window, Show Preview, Open Menu Bar Menu, and the error
   for a shortcut that could not be registered
 - Folders: the wallpaper folders, each with the absolute path the app uses
+- Sources: the wallpaper sources, the download folder, Download Now, the
+  Browse button, and the daily download toggle
 - Themes: the themes
 - Rotation: interval and action; the theme actions need at least one theme
 
@@ -393,7 +401,10 @@ the tag. It never pushes by itself.
 Wallpaper Selector runs locally. Folder paths, themes, shortcuts, and history
 stay in `~/Library/Application Support/WallpaperSelector/settings.json` unless
 you choose a different settings folder. It does not upload images, settings,
-or usage data.
+or usage data. The app contacts the wallpaper sources only when you press
+**Download Now**, browse a source, or turn on the daily download; it writes
+the images into a local folder. It sends no data about you beyond a plain
+request for that source.
 
 ## Releases and Homebrew
 

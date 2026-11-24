@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Settings has a Sources pane. Check off Wallhaven, Bing Daily, and Wikimedia
+  Commons, then press Download Now. The app downloads up to eight wallpapers
+  per source into `~/Pictures/Wallpaper Selector`, keeps the files that are
+  already there, and adds the folder to the rotation. A failed source is
+  reported in the pane and does not stop the other sources.
+- A Browse window shows the wallpapers the checked sources offer right now,
+  one source at a time. One tap downloads a wallpaper and sets it.
+- An optional Download Daily toggle fetches three wallpapers per source once
+  a day while the app is running. It is off by default.
+
 ## [1.1.1] - 2026-11-23
 
 ### Added
