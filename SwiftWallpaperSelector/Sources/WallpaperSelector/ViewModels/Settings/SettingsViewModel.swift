@@ -43,6 +43,26 @@ final class SettingsViewModel: ObservableObject {
 
     @Published var showMenuBarItem: Bool = true
 
+    /// The sources a download takes wallpapers from.
+    @Published var wallpaperSources: [WallpaperSource] = []
+
+    @Published private(set) var isDownloadingWallpapers = false
+
+    @Published private(set) var wallpaperDownloadMessage: String? = nil
+
+    @Published private(set) var wallpaperDownloadError: String? = nil
+
+    /// Whether the app downloads the sources once a day on its own.
+    @Published var dailyDownloadEnabled: Bool = false
+
+    /// The wallpapers the browser shows, and the state of loading them.
+    @Published private(set) var remoteWallpapers: [RemoteWallpaper] = []
+    @Published var remoteBrowserSource: WallpaperSource = .wallhaven
+    @Published private(set) var isLoadingRemoteWallpapers = false
+    @Published private(set) var applyingRemoteWallpaper: String? = nil
+    @Published private(set) var appliedRemoteWallpaperPath: String? = nil
+    @Published private(set) var remoteWallpaperError: String? = nil
+
     /// The Spaces of the Mac, in the order Mission Control shows them.
     @Published private(set) var spaces: [DesktopSpace] = []
 
@@ -86,6 +106,10 @@ final class SettingsViewModel: ObservableObject {
 
     private let appState: AppState
     private let launchAtLoginManager: LaunchAtLoginManager
+    private let wallpaperDownloadService = WallpaperDownloadService()
+
+    /// The wallpapers one download takes from every selected source.
+    private static let wallpapersPerSource = 8
 
 
     init(appState: AppState, launchAtLoginManager: LaunchAtLoginManager? = nil) {
@@ -185,6 +209,129 @@ final class SettingsViewModel: ObservableObject {
         hotKeyErrorMessage = message
     }
 
+
+    // MARK: - Wallpaper sources
+
+    /// The folder a download writes into.
+    ///
+    /// It is not a setting: the folder belongs to the app, and the app adds
+    /// it to the folder list after the first download.
+    var wallpapersDownloadFolder: URL {
+        WallpaperDownloadFolder.url
+    }
+
+    func setWallpaperSource(_ source: WallpaperSource, enabled: Bool) {
+        appState.updateSettings { settings in
+            var newSettings = settings
+            if enabled {
+                if !newSettings.wallpaperSources.contains(source) {
+                    newSettings.wallpaperSources.append(source)
+                }
+            } else {
+                newSettings.wallpaperSources.removeAll { $0 == source }
+            }
+            settings = newSettings
+        }
+    }
+
+    func setDailyDownloadEnabled(_ enabled: Bool) {
+        appState.updateSettings { settings in
+            settings.dailyDownloadEnabled = enabled
+        }
+    }
+
+    /// Loads the wallpapers the selected source offers right now.
+    func loadRemoteWallpapers() {
+        guard !isLoadingRemoteWallpapers else { return }
+        guard wallpaperSources.contains(remoteBrowserSource) else {
+            remoteWallpapers = []
+            remoteWallpaperError = "Check at least one source first."
+            return
+        }
+
+        isLoadingRemoteWallpapers = true
+        remoteWallpaperError = nil
+        let source = remoteBrowserSource
+        Task { [weak self, service = wallpaperDownloadService] in
+            let result: Result<[RemoteWallpaper], Error>
+            do {
+                result = .success(try await service.remoteWallpapers(
+                    for: source,
+                    count: Self.wallpapersPerSource
+                ))
+            } catch {
+                result = .failure(error)
+            }
+            guard let self else { return }
+            self.isLoadingRemoteWallpapers = false
+            switch result {
+            case .success(let wallpapers):
+                self.remoteWallpapers = wallpapers
+            case .failure(let error):
+                self.remoteWallpapers = []
+                self.remoteWallpaperError = "\(source.label): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Saves a browsed wallpaper and puts it on the screen.
+    func useRemoteWallpaper(_ wallpaper: RemoteWallpaper) {
+        guard applyingRemoteWallpaper == nil else { return }
+        applyingRemoteWallpaper = wallpaper.fileName
+        remoteWallpaperError = nil
+        let folder = wallpapersDownloadFolder
+        Task { [weak self, service = wallpaperDownloadService] in
+            do {
+                let url = try await service.save(wallpaper, into: folder)
+                guard let self else { return }
+                // The folder joins the rotation like any folder the user adds.
+                self.addFolder(folder.path)
+                self.appState.refreshImagesFromDisk()
+                self.appState.setWallpaper(url)
+                self.appliedRemoteWallpaperPath = url.path
+            } catch {
+                self?.remoteWallpaperError = error.localizedDescription
+            }
+            self?.applyingRemoteWallpaper = nil
+        }
+    }
+
+    func downloadWallpapers() {
+        guard !isDownloadingWallpapers else { return }
+        guard !wallpaperSources.isEmpty else {
+            wallpaperDownloadError = "Choose at least one source first."
+            return
+        }
+
+        isDownloadingWallpapers = true
+        wallpaperDownloadError = nil
+        wallpaperDownloadMessage = "Downloading wallpapers…"
+        let sources = wallpaperSources
+        let folder = wallpapersDownloadFolder
+
+        Task { [weak self, service = wallpaperDownloadService] in
+            let summary = await service.downloadWallpapers(
+                from: sources,
+                count: Self.wallpapersPerSource,
+                into: folder
+            )
+            guard let self else { return }
+            self.isDownloadingWallpapers = false
+            if summary.saved > 0 {
+                // The folder joins the rotation like any folder the user adds.
+                self.addFolder(folder.path)
+                self.appState.refreshImagesFromDisk()
+                self.wallpaperDownloadMessage = summary.saved == 1
+                    ? "Downloaded 1 wallpaper into \(folder.path)."
+                    : "Downloaded \(summary.saved) wallpapers into \(folder.path)."
+            } else {
+                self.wallpaperDownloadMessage = nil
+            }
+            self.wallpaperDownloadError = summary.failures.isEmpty
+                ? nil
+                : summary.failures.joined(separator: "\n")
+        }
+    }
 
     func addFolder(_ path: String) {
         // The app reads the folders with an absolute path, so the path the
@@ -694,8 +841,18 @@ final class SettingsViewModel: ObservableObject {
         shortcuts = settings.shortcuts
         historyLimit = settings.historyLimit
         currentWallpaper = settings.currentWallpaper
+        // The badge of the browser only marks the pick while it is still on
+        // the screen: a rotation moves on, and the badge must too.
+        if let applied = appliedRemoteWallpaperPath, applied != settings.currentWallpaper {
+            appliedRemoteWallpaperPath = nil
+        }
         spacePins = settings.spacePins
         showMenuBarItem = settings.showMenuBarItem
+        wallpaperSources = settings.wallpaperSources
+        dailyDownloadEnabled = settings.dailyDownloadEnabled
+        if !wallpaperSources.contains(remoteBrowserSource) {
+            remoteBrowserSource = wallpaperSources.first ?? remoteBrowserSource
+        }
 
         appearanceLightThemeID = settings.appearanceLightThemeID
         appearanceDarkThemeID = settings.appearanceDarkThemeID

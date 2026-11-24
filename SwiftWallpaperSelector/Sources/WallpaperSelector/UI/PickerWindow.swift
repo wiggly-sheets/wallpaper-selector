@@ -11,6 +11,7 @@ struct PickerWindow: View {
     @State private var showingAppearanceDialog = false
     @State private var showingFoldersDialog = false
     @State private var showingThemesDialog = false
+    @State private var showingBrowseDialog = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,6 +100,13 @@ struct PickerWindow: View {
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
                 .help("Manage themes")
+
+                Button(action: { showingBrowseDialog = true }) {
+                    Label("Browse online wallpapers", systemImage: "globe")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help("Browse online wallpapers")
 
                 Button(action: {
                     NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
@@ -221,6 +229,11 @@ struct PickerWindow: View {
                 .environmentObject(settingsViewModel)
                 .environmentObject(appState)
                 .frame(width: 440, height: 400)
+        }
+        .sheet(isPresented: $showingBrowseDialog) {
+            RemoteWallpaperBrowser()
+                .environmentObject(settingsViewModel)
+                .environmentObject(appState)
         }
         .onAppear {
             // Files can be added or removed while the window is closed.

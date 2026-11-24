@@ -19,6 +19,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingAddFolder = false
     @State private var showingAddTheme = false
+    @State private var showingRemoteBrowser = false
     @State private var selectedCategory: SettingsCategory = .general
 
     var body: some View {
@@ -44,6 +45,8 @@ struct SettingsView: View {
                     shortcutsPane
                 case .folders:
                     foldersPane
+                case .sources:
+                    sourcesPane
                 case .themes:
                     themesPane
                 case .rotation:
@@ -94,6 +97,10 @@ struct SettingsView: View {
             AddThemeView(availableFolders: viewModel.folderPaths) {
                 viewModel.addTheme($0)
             }
+        }
+        .sheet(isPresented: $showingRemoteBrowser) {
+            RemoteWallpaperBrowser()
+                .environmentObject(viewModel)
         }
         .frame(minWidth: 760, maxWidth: .infinity, minHeight: 560, maxHeight: .infinity)
     }
@@ -310,6 +317,103 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private var sourcesPane: some View {
+        Section {
+            ForEach(WallpaperSource.allCases) { source in
+                Toggle(isOn: sourceBinding(source)) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(source.label)
+                        Text(source.detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityLabel("\(source.label) source toggle")
+            }
+        } header: {
+            Text("Sources")
+        } footer: {
+            Text("Every checked source is downloaded together, into the same folder.")
+        }
+
+        Section {
+            Text(viewModel.wallpapersDownloadFolder.path)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+
+            HStack(spacing: 8) {
+                Button {
+                    viewModel.downloadWallpapers()
+                } label: {
+                    Label("Download Now", systemImage: "arrow.down.circle")
+                }
+                .disabled(viewModel.wallpaperSources.isEmpty || viewModel.isDownloadingWallpapers)
+
+                if viewModel.isDownloadingWallpapers {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if let message = viewModel.wallpaperDownloadMessage {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if let errorMessage = viewModel.wallpaperDownloadError {
+                errorRow(errorMessage)
+            }
+
+            Button {
+                showingRemoteBrowser = true
+            } label: {
+                Label("Browse Online Wallpapers\u{2026}", systemImage: "globe")
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.borderless)
+            .disabled(viewModel.wallpaperSources.isEmpty)
+        } header: {
+            Text("Download")
+        } footer: {
+            Text("Browse shows the wallpapers the checked sources offer right now. One tap downloads a wallpaper and sets it. Everything lands in the folder above, which joins the rotation like any folder you add.")
+        }
+
+        Section {
+            Toggle(isOn: dailyDownloadBinding) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Download Daily")
+                    Text("Adds three wallpapers per source every day.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("Download daily toggle")
+        } header: {
+            Text("Automatic")
+        } footer: {
+            Text("Runs once a day while Wallpaper Selector is running. Off by default.")
+        }
+    }
+
+    private var dailyDownloadBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.dailyDownloadEnabled },
+            set: { viewModel.setDailyDownloadEnabled($0) }
+        )
+    }
+
+    private func sourceBinding(_ source: WallpaperSource) -> Binding<Bool> {
+        Binding(
+            get: { viewModel.wallpaperSources.contains(source) },
+            set: { viewModel.setWallpaperSource(source, enabled: $0) }
+        )
+    }
+
+    @ViewBuilder
     private var themesPane: some View {
         Section {
             if viewModel.themes.isEmpty {
@@ -472,7 +576,7 @@ struct SettingsView: View {
 }
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case general, appearance, spaces, shortcuts, folders, themes, rotation
+    case general, appearance, spaces, shortcuts, folders, sources, themes, rotation
 
     var id: Self { self }
     var title: String { rawValue.capitalized }
@@ -483,6 +587,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .spaces: "rectangle.on.rectangle"
         case .shortcuts: "keyboard"
         case .folders: "folder"
+        case .sources: "arrow.down.circle"
         case .themes: "paintpalette"
         case .rotation: "arrow.triangle.2.circlepath"
         }
